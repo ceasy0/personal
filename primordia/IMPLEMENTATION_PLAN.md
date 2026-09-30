@@ -1,1002 +1,762 @@
-# Primordia: Implementation Plan
+# Primordia: Implementation Plan (v2)
 
-> **Working title.** Primordia is an interactive 3D app for looking at genetic "code" (DNA, RNA and the proteins they encode) and **watching it run**. It starts with single molecules, moves through the RNA world and the first protocells, and ends with a living minimal cell that grows and divides.
+> A **genetic code simulator**: import a real DNA sequence, run the molecular machinery that reads it, and watch what it actually produces — at single-nucleotide, single-molecule resolution, with every number traceable to a source.
 
-**Status:** Draft v1, 2026-09-30
-**Scope of this doc:** the product vision, how honest the science needs to be, the architecture, the modeling approach, a phased roadmap with acceptance criteria, risks, and the open questions I need answered.
+**Status:** v2, 2026-09-30. Rewritten after your answers. v1 was an education-first app; this is an accuracy-first scientific instrument.
+**Companion documents:**
+- [`ACCURACY_ROADMAP.md`](./ACCURACY_ROADMAP.md) — what humanity does and doesn't understand about the genetic code, layer by layer, and the long-term path to closing each gap.
+- [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) — setting up your PC, including letting AI drive Blender and the scientific toolchain.
 
 ---
 
 ## Table of contents
 
-0. [TL;DR](#0-tldr)
-1. [The science: what "running the code" really means](#1-the-science-what-running-the-code-really-means)
-2. [Product vision](#2-product-vision)
-3. [Recommendations: things worth adding](#3-recommendations-things-worth-adding)
-4. [UX and visual design](#4-ux-and-visual-design)
-5. [Technical architecture](#5-technical-architecture)
-6. [Scientific modeling: the hard parts](#6-scientific-modeling-the-hard-parts)
-7. [Content and education framework](#7-content-and-education-framework)
-8. [Roadmap](#8-roadmap)
-9. [Testing and quality](#9-testing-and-quality)
-10. [Risks and mitigations](#10-risks-and-mitigations)
-11. [Open questions for you](#11-open-questions-for-you)
-12. [Next steps (first two weeks)](#12-next-steps-first-two-weeks)
+- [0. What changed in v2](#0-what-changed-in-v2)
+- [1. Your three questions, answered](#1-your-three-questions-answered)
+- [2. What the app is](#2-what-the-app-is)
+- [3. The accuracy contract](#3-the-accuracy-contract)
+- [4. The system ladder](#4-the-system-ladder)
+- [5. The core: a sequence-level expression simulator](#5-the-core-a-sequence-level-expression-simulator)
+- [6. The Capability Report](#6-the-capability-report)
+- [7. Architecture](#7-architecture)
+- [8. Data layer](#8-data-layer)
+- [9. Rendering, assets and the Blender pipeline](#9-rendering-assets-and-the-blender-pipeline)
+- [10. Sound design](#10-sound-design)
+- [11. AI inside the app](#11-ai-inside-the-app)
+- [12. Validation suite](#12-validation-suite)
+- [13. Roadmap](#13-roadmap)
+- [14. Budget options](#14-budget-options)
+- [15. Risks](#15-risks)
+- [16. Terms you asked about](#16-terms-you-asked-about)
+- [17. Remaining open questions](#17-remaining-open-questions)
 - [Appendix A: Reference numbers](#appendix-a-reference-numbers)
-- [Appendix B: Key scientific references](#appendix-b-key-scientific-references)
-- [Appendix C: Prior art and inspiration](#appendix-c-prior-art-and-inspiration)
+- [Appendix B: References](#appendix-b-references)
 
 ---
 
-## 0. TL;DR
+## 0. What changed in v2
 
-**Can this go all the way up to a single-celled organism?** **Yes**, if it's an *educational simulation built in layers* and not a from-first-principles physics simulation. Three facts shape the design:
+Your answers, and what each one did to the plan:
 
-1. **Nobody can simulate life from atoms up, and we don't need to.** The most complete computer model of a living cell so far is a 2026 "4D" whole-cell simulation of the minimal bacterium JCVI-syn3A. It covers all 493 genes and a full 105-minute cell cycle, and it's a major research effort run on high-performance computing. It still works by giving each process its own simplified model and stitching those models together. We'll use the same approach at much lower resolution, tuned for understanding and frame rate rather than prediction.
-2. **DNA on its own doesn't build anything.** DNA is code that needs a computer that's already running (a cell) to execute it. Put a genome in empty space and nothing happens, apart from slow decay. That is the chicken-and-egg problem your RNA idea points at. **RNA can be both the code and the machine** (ribozymes). So the *RNA world* is the natural "boot sequence" for the app's story. The app should show this directly instead of hiding it.
-3. **Evolution does the building.** Running one sequence once produces molecules. Complexity comes from many copies, copying errors and selection over time. The app needs a **population/evolution view** as well as single-genome playback.
-
-**What I recommend:**
-
-- **Platform:** a web app (TypeScript + React + three.js via React Three Fiber). It runs in any modern browser, is easy to share, can be installed as a desktop/PWA app later, and has the best tools for the text-heavy educational UI.
-- **Architecture:** the simulation runs deterministically in a Web Worker and is **separate from the 3D view**. A "Director" picks which simulated events to show up close. Everything else appears as crowds, charts and counters.
-- **Three modes:** **Journey** (guided story in 4 acts, 13 chapters), **Lab** (sandbox: edit, run, compare) and **Challenges** (puzzles in the style of Eterna and Foldit).
-- **Honesty layer:** every scene carries an *evidence level* (Established / Demonstrated in lab / Hypothesis / Speculative) and a "What we simplified" note.
-- **First milestone ("Run a gene"):** paste DNA → see a 3D helix → press ▶ → watch RNA polymerase transcribe it and a ribosome translate the message into a glowing GFP protein. Then mutate one letter and replay.
-
----
-
-## 1. The science: what "running the code" really means
-
-Getting this right is what makes the app *educational* and not just pretty, so it comes first.
-
-### 1.1 Genome as program, cell as computer
-
-The analogy is a great teaching tool, and the app should lean on it with its own UI (see the "genome debugger" in §4.2):
-
-| Computing | Biology |
+| Your answer | Effect on the plan |
 |---|---|
-| Source code | DNA sequence |
-| Keywords / syntax | Promoters, ribosome binding sites, start/stop codons, terminators |
-| Compiler + interpreter | Transcription (DNA→RNA) and translation (RNA→protein) machinery |
-| Program counter | Position of RNA polymerase or ribosome on the strand |
-| Program output | Proteins and functional RNAs |
-| Operating system / hardware | The cell that's already running: membrane, metabolism, ribosomes, polymerases |
-| Booting a new OS | Genome transplantation: a synthetic genome placed in a recipient cell "boots up" (JCVI, 2010) |
-| Self-modifying code | Mutation, recombination |
-| Fork() | Cell division |
+| Accuracy above everything; audience is you | The whole plan is reorganized around a **provenance and uncertainty system** (§3). Education features are demoted to "the instrument explains itself". |
+| The genetic code is the focus; start simple and work up | The core is now a **sequence-level, mechanism-level expression simulator** (§5), not a scene graph with animations attached. |
+| Desktop app first | **Tauri 2 + Rust simulation core + Python reference lane** (§7). No web target in v1, but the core stays portable. |
+| Journey later | Agreed, with reasoning in §1.3. Narrative content moves to Phase 7. |
+| Import real genomes | First-class. GenBank/FASTA/GFF import, plus the **Capability Report** (§6) that tells you honestly what the app can and can't do with a given genome. |
+| AI in the app eventually | §11. The valuable use is **AI as a parameter oracle with declared error bars**, not a chatbot. |
+| Sound and visual quality both matter | §9 (Blender-baked assets) and §10 (event-driven procedural audio). |
+| No accessibility/i18n/analytics priority, no reviewer needed | Dropped as requirements. Replaced by an **automated validation suite** (§12) — for an accuracy-first tool, tests beat reviewers anyway. |
+| Budget options wanted | §14, three tiers. The honest answer is that the $0 tier covers almost everything. |
+| Recs 11 and 14 unclear | Explained in §16. |
 
-**Where the analogy breaks** (the app should say so, e.g. in the chapter 3 epilogue): thousands of "programs" run at once in parallel; execution is random, not deterministic; there's no clean line between hardware and software (especially with RNA); the "code" is never designed, only selected; and most of what a genome "means" depends on the cell it's in.
-
-### 1.2 The bootstrapping problem and the RNA world
-
-Reading DNA needs proteins (polymerases). Making proteins needs RNA (messenger, transfer and ribosomal RNA) and proteins. Copying DNA needs proteins. So which came first?
-
-The **RNA world hypothesis** says that early life used RNA for *both* storing information and doing catalysis:
-
-- **Ribozymes exist.** RNA enzymes were discovered by Cech (self-splicing intron, 1982) and Altman (RNase P), who shared the 1989 Nobel Prize.
-- **The ribosome is a ribozyme.** Its catalytic heart, which joins amino acids together, is RNA, not protein (ribosome structures from 2000).
-- **The idea fits von Neumann's theory of self-reproducing machines.** A self-copier needs a *description* (code), a *constructor* (machine) and a *copier*. In RNA, one molecule can be all three.
-
-This directly answers your parenthetical ("RNA at some point was able to create a code that created itself"). That idea is the RNA world hypothesis. It's **widely supported but not proven**, and some pieces of it have been demonstrated in the lab (see below).
-
-### 1.3 "RNA that makes itself": what's actually real
-
-| Result | When | What it shows | Evidence level |
-|---|---|---|---|
-| Spiegelman's "monster" | 1960s | A protein enzyme (Qβ replicase) copies viral RNA in a test tube. When selected for speed, the RNA shrinks dramatically: evolution of molecules outside cells. | Demonstrated |
-| Non-enzymatic template copying (Orgel and many others) | 1970s → today | Activated nucleotides can copy short RNA templates with no enzyme at all, but slowly and with errors. | Demonstrated (limited) |
-| Prebiotic nucleotide synthesis (e.g. Powner, Gerland & Sutherland) | 2009 → today | Plausible chemical routes to RNA building blocks. | Demonstrated (pieces) |
-| Cross-replicating RNA ligases (Lincoln & Joyce) | 2009 | Two RNA enzymes, E and E′, each assemble the *other* from pre-made halves. This gives self-sustained exponential replication, and variants compete. | Demonstrated |
-| RNA polymerase ribozymes (Bartel lab 2001 → Holliger and Joyce labs) | 2001 → 2020s | RNA that copies other RNAs, now up to roughly 200 nt under special conditions. | Demonstrated |
-| **QT45** (Holliger lab, *Science*) | 2025–26 | A **45-nucleotide** polymerase ribozyme that makes its complementary strand (94.1% accuracy per nucleotide) *and* a copy of itself, using 3-letter RNA building blocks in slightly alkaline ice. Yields are about 0.2% over 72 days. **This is the closest anyone has come to an RNA that copies itself.** | Demonstrated (partial) |
-| An RNA that copies itself **repeatedly and open-endedly**, without help | — | **Not yet achieved.** | — |
-| Life actually began this way | ~4 billion years ago | Still a hypothesis. Competing and complementary ideas: metabolism-first (hydrothermal vents), lipid world, RNA and peptides evolving together. | Hypothesis |
-
-For the app: the E/E′ cross-replicator and the QT45 story make excellent, *honest* centerpieces for Act II.
-
-### 1.4 How far up can a simulation go? The precedents
-
-- **Karr et al., 2012:** first "whole-cell" model (*Mycoplasma genitalium*, 525 genes), built from 28 sub-models of different kinds.
-- **Thornburg et al., 2022:** minimal cell JCVI-syn3A, a hybrid model that mixes random (stochastic) and smooth (deterministic) methods and tracks space.
-- **Thornburg, Maytin et al., *Cell*, 2026:** 4D whole-cell model covering the **full 105-minute cell cycle**, all 493 genes, metabolism, ribosome assembly, DNA replication, growth and division. Across 50 replicate runs, the predicted doubling time was within about 2 minutes of the lab measurement. The simulation code is public (Luthey-Schulten Lab, `Minimal_Cell` on GitHub).
-
-**What we take from this:** a "genome → living cell" simulation is *scientifically legitimate* when it's layered: one appropriate model per process, stitched together. We copy that *architecture* at much lower resolution and pull parameters from these papers where we can. We never claim to predict anything.
-
-### 1.5 Evidence levels (shown everywhere in the app)
-
-| Label | Meaning | Example |
-|---|---|---|
-| **Established** | Textbook consensus, observed directly | Base pairing, translation, the genetic code |
-| **Demonstrated** | Shown in lab experiments; whether it happened on early Earth is unknown | Cross-replicating ligases, protocell competition |
-| **Hypothesis** | Widely discussed, supported by indirect evidence | The RNA world |
-| **Speculative** | One of several competing ideas | Specific routes to the genetic code |
-| *Simplified* (a separate flag) | This visual or model deliberately simplifies. Tap to see how and why. | Sped-up reaction rates; shortened sequences |
+**The one-sentence version of the change:** v1 was "a story about the genetic code with a simulation inside it." v2 is "a simulator of the genetic code that can tell a story later."
 
 ---
 
-## 2. Product vision
+## 1. Your three questions, answered
 
-### 2.1 Audience and goals (assumed; see [Open questions](#11-open-questions-for-you))
+### 1.1 Do we understand exactly how the genetic code works? Can we simulate it accurately yet?
 
-- **Primary:** curious teens and adults, roughly high school to intro-college biology level.
-- **Secondary:** teachers (as a classroom demo tool) and enthusiasts who want the sandbox.
-- **Learning goals:** understand (1) how a sequence becomes structure and function, (2) why DNA needs a cell and why RNA might have come first, (3) how copying + errors + selection builds complexity, and (4) how a genome keeps a cell alive and lets it reproduce.
+**Partly — and the parts split cleanly.** This is the single most important thing to get straight, because it determines what the app should claim. [`ACCURACY_ROADMAP.md`](./ACCURACY_ROADMAP.md) does this in full; here is the summary.
 
-### 2.2 Design principles
+| Layer | Question it answers | Status | Best error today |
+|---|---|---|---|
+| **L0. Code semantics** | Which amino acid does this codon specify? | **Solved.** The codon tables are exact and experimentally verified, and the ~30 known variant tables and recoding events (selenocysteine, frameshifting, readthrough) are catalogued with their signals. | Zero, for annotated cases |
+| **L1. Machine mechanism** | What physically happens, step by step, when a polymerase or ribosome reads a strand? | **Solved mechanistically.** Structures, step order and rates are known in detail for bacterial systems. | Mechanism: none. Rates: see L2 |
+| **L2. Sequence → rate** | How fast does *this* promoter fire? How strongly does *this* ribosome binding site initiate? | **Partly solved.** Best public translation-initiation predictor lands within 2× of measurement about half the time, within 10× about 91% of the time. Promoter strength is worse. mRNA half-life from sequence is worse still. | 2–10× typical |
+| **L3. RNA structure** | What shape does this RNA fold into? | **Partly solved.** Thermodynamic folding sits around F1 ≈ 0.7 on mixed benchmarks; recent deep-learning methods do not reliably beat it on families they weren't trained on. Cotranscriptional and kinetic folding is less settled. | ~30% of base pairs wrong |
+| **L4. Protein function** | What does this protein *do*, and how fast? | **Structure largely solved** for natural sequences (AlphaFold-class). **Function not solved.** No general method predicts kcat, Km, or specificity from sequence. Variant-effect models give rank-order scores, not rate constants. | Order-of-magnitude or worse |
+| **L5. Whole cell** | Does this genome keep a cell alive and dividing? | **Partly solved for minimal cells.** Whole-cell models of *M. genitalium*, *E. coli* and JCVI-syn3A reproduce doubling times and many phenotypes — but with heavy lumping, fitted parameters, and gaps. Roughly 15–30% of even syn3A's 493 genes still have unclear function, depending on how you count. | Qualitative to ~10% on headline numbers |
+| **L6. Genome → organism** | What does this organism look like and do? | **Not solved** beyond minimal cells. | n/a |
 
-1. **See it → Run it → Break it → Fix it.** Every chapter ends with the user changing something and seeing what happens.
-2. **Honest by default.** Evidence badges, "What we simplified" notes and references are always one tap away.
-3. **Progressive disclosure.** It looks simple at first; expert panels (rates, raw sequence, plots) open on demand.
-4. **Every number has units and a scale.** A permanent scale bar and time-scale readout ("1 s on screen ≈ 3 min of cell time").
-5. **Deterministic and shareable.** The same scenario + seed + edits gives the same run, so anyone can share a link to "watch what I saw".
-6. **Beautiful, but clear before pretty.** An art direction inspired by David Goodsell's molecular illustrations: color-coded, readable, uncluttered.
+**So: yes, start with basic genetic code and work up — that is exactly right, and it's not a compromise.** L0 and L1 are genuinely exact, and they are the whole of "the genetic code running." A simulator that nails L0–L1, is quantitative-with-error-bars at L2–L3, and is honest about L4–L6 is not a toy. It is close to the research frontier, because the research frontier is also stuck at L4.
 
-### 2.3 Three modes
+The design consequence is §3: **the app must represent its own uncertainty as data, not as a disclaimer.**
 
-| Mode | What it is | Unlocks |
+### 1.2 Is the RNA world hypothesis good enough to structure the app around?
+
+**No — and I'd now argue it's the wrong spine, regardless of whether the hypothesis is true.** Four reasons:
+
+1. **It's a hypothesis about history; you want a simulator of a mechanism.** The central dogma is observed daily in labs. The RNA world is an inference about events four billion years ago that left no direct record. Architecture built on an inference has to be rebuilt when the inference moves. Architecture built on mechanism does not.
+2. **It's the worst-parameterized corner of the whole field.** Prebiotic chemistry has few measured rate constants, contested conditions, and no consensus environment. Building the engine there means calibrating against the weakest data available — the opposite of accuracy-first.
+3. **It isn't actually what you asked for.** Your focus is "the genetic code and what can be built with it." The RNA world is a story about where the code *came from*, which is a different (and much less settled) question than how it *works*.
+4. **You lose nothing by demoting it.** In a properly general engine, "an RNA that catalyzes RNA polymerization" is just an entity with a catalytic rule. Once the engine handles arbitrary polymers, templated synthesis and catalysis, RNA-world scenarios become *content you load*, not architecture you depend on. They arrive free at Tier 5 (§4).
+
+**What to structure it around instead: a ladder of physical systems ordered by how well-determined they are.** Each rung is a real system someone has actually built and measured, so each rung has a ground truth to validate against:
+
+> **sequence semantics → reconstituted cell-free expression → encapsulated cell-free (synthetic cell) → whole minimal cell → populations → origin-of-life scenarios**
+
+This ordering happens to also run from simple to complex, so "start simple" and "start where the data is best" point the same way. §4 develops it.
+
+**The key unlock in this reframing** is rung 1: the **PURE system** — a reconstituted cell-free transcription–translation mix assembled from purified components, where every ingredient and its concentration is known. It is, almost literally, the thing you described in your first message: genetic code in an otherwise empty space, building something. It's real, it's commercially available, published mechanistic models of it are validated against experimental time courses, and it has **no unknown genes, no unmeasured cell context and no hidden regulation**. It is the most accurately simulatable "genetic code running" system that exists. That's where the app should start.
+
+### 1.3 Should the Journey come later?
+
+**Yes, and I agree with you.** In v1 I put it early on the assumption of an outside audience; you've removed that assumption, and the argument flips:
+
+- **Content authored against an unfinished engine gets rewritten every time the engine changes.** Narrative is the most expensive thing to redo and the last thing that should be written.
+- **For an audience of one who is building the thing, guided narration has near-zero value.** You'll know more about each scene than the script does.
+- **The engine is the risky part.** Effort should go where uncertainty is, and the uncertainty is all in the simulation core.
+
+**But keep the explanatory surfaces**, because they serve accuracy rather than pedagogy: the inspector panel, the provenance badges, the glossary, the "why did this happen" trace on any event. Those exist so *you* can tell whether the simulator is lying to you. That is debugging, not teaching.
+
+Journey content moves to **Phase 7**, optional, built on a frozen engine.
+
+---
+
+## 2. What the app is
+
+**Primordia is a desktop instrument for executing genetic sequences.**
+
+You give it: a DNA (or RNA) sequence, annotations, and a defined molecular environment — which polymerases, ribosomes, tRNAs, nucleotides, amino acids and energy sources are present, at what concentrations.
+
+It gives you: a physically-grounded, stochastic, single-molecule, single-nucleotide simulation of what that machinery does to that sequence over time, rendered in 3D, with every event traceable to sequence coordinates and every rate constant traceable to a source.
+
+### 2.1 The three things it must do well
+
+1. **Execute.** Run the machinery over the sequence, correctly and at the right speeds, producing the right molecules in the right amounts.
+2. **Account.** For every number it uses and every result it shows, say where it came from and how confident it is.
+3. **Show.** Render it so that what you see corresponds to what was simulated, with every visual deviation from physical reality named and toggleable.
+
+### 2.2 Non-goals
+
+Unchanged from v1 unless noted:
+
+- Atom-level physics (molecular dynamics). Atoms appear as **rendered geometry** from known structures; they are never simulated as dynamical objects.
+- Predicting function for genuinely novel sequences. The app reports "unknown" and means it (§6).
+- Eukaryotic cells, multicellularity, development.
+- Wet-lab design output (primer design, synthesis-ready constructs). Nothing here is validated for physical experiments.
+- **New in v2:** no web deployment in v1, no accounts, no analytics, no translation, no classroom features.
+
+---
+
+## 3. The accuracy contract
+
+This section is the difference between a simulator and an animation. Everything else in the plan hangs off it.
+
+### 3.1 Every parameter carries provenance
+
+No number enters the simulation as a bare float. Every one is a typed record:
+
+```rust
+// crates/primordia-params/src/lib.rs
+pub enum Provenance {
+    /// Directly measured. Must carry citation, organism, conditions.
+    Measured   { source: CitationId, organism: Taxon, conditions: Conditions },
+    /// Computed from other parameters. Uncertainty is propagated, not invented.
+    Derived    { from: Vec<ParamId>, method: &'static str },
+    /// Output of a named predictive model with a published error distribution.
+    Predicted  { model: ModelId, benchmark: BenchmarkId },
+    /// Tuned so the simulation reproduces a named dataset. Records what was fitted to.
+    Fitted     { target: DatasetId, method: &'static str, residual: f64 },
+    /// A guess. Always flagged; blocks strict mode.
+    Assumed    { rationale: &'static str },
+}
+
+pub struct Param {
+    pub id: ParamId,
+    pub value: f64,
+    pub unit: Unit,                      // dimensional analysis is enforced at compile time
+    pub uncertainty: Uncertainty,        // point / interval / distribution
+    pub provenance: Provenance,
+    pub valid_range: Option<(f64, f64)>, // outside this, the simulator warns
+}
+```
+
+Consequences, all of them deliberate:
+
+- **Strict mode** refuses to run any simulation that depends on an `Assumed` parameter. If you want a number, you have to go find it or admit you're guessing. This is the single most important feature in the app.
+- **Provenance is visible in the UI.** Every rate shown in the inspector has a colored badge: green `Measured`, blue `Derived`, amber `Predicted`, orange `Fitted`, red `Assumed`. Clicking it opens the citation.
+- **Provenance propagates to results.** A protein count computed from three `Measured` and one `Assumed` parameter is itself marked `Assumed`. The weakest link colors the output. You can see at a glance which parts of a result you can trust.
+- **The parameter store is a queryable database**, not scattered constants. It ships as a versioned data file, diffable in git, so changing a rate constant is a reviewable change with a citation attached.
+
+### 3.2 Uncertainty is propagated, not hidden
+
+- Every simulation can run as an **ensemble**: N replicates, with parameters resampled from their uncertainty distributions and a different RNG seed each time.
+- Time-series outputs are drawn as **bands** (median + interquantile range), never as a single confident line, unless the ensemble is size 1 and the UI says so.
+- A **sensitivity view** ranks which parameters actually drive the variance in a given output. This tells you where better data would help most — it is, in effect, a research to-do list generated by your own model.
+
+### 3.3 Honest visualization
+
+Geometric realism and scientific accuracy are not the same thing, and conflating them is how visualizations lie. Real cytoplasm is opaquely crowded; real molecules move microns per second; real transcription of a gene takes tens of seconds while a single nucleotide addition takes milliseconds. Render all of that literally and you get an unreadable blur.
+
+So: **every deviation from physical reality is a named, logged, toggleable transformation with a numeric value shown in the HUD.**
+
+| Transformation | Shown as | Default |
 |---|---|---|
-| **Journey** | A guided story in 4 acts (below). Each chapter is a scene + narration + interactive "Try it" steps + a short check. | From the start |
-| **Lab** | A sandbox. Build or import sequences; fold, translate, run, evolve, put in a protocell or cell; compare runs A/B. | Parts unlock per chapter (all available via a toggle) |
-| **Challenges** | Goal-based puzzles: "design an RNA that folds into this shape", "fix the broken gene", "keep the replicator alive at a higher mutation rate", "build an oscillator", "remove genes and keep the cell alive". | After the matching chapters |
+| Time dilation | `×0.001 real-time` in the HUD, always | On, value varies |
+| Crowding reduction | `crowders: 12% shown` | On |
+| Diffusion damping | `D ×0.05` | On for legibility |
+| Schematic geometry (e.g. a folded RNA placed by layout, not by structure prediction) | Hatched outline on the object + `schematic` tag in the inspector | On where no real structure exists |
+| Size exaggeration | `scale ×N` per class | **Off by default** — sizes are physically correct unless you say otherwise |
+| Stoichiometry sampling (showing 1 of every N identical molecules) | `sampled 1:200` | On at cell scale |
 
-### 2.4 The Journey
+A **"physical mode"** button sets every one of these to 1.0. The result is unreadable, and that's the point: seeing it once tells you exactly how much the normal view is helping you.
 
-| # | Chapter | What you see and do | What's simulated vs. narrated | Evidence |
+### 3.4 Determinism and reproducibility
+
+- All randomness comes from a seeded, explicit PRNG in the Rust core. Nothing calls a system RNG.
+- Transcendental functions go through `libm` rather than platform intrinsics, so results are **bit-identical across machines and OSes**. A run is reproducible from `(engine version, parameter set version, scenario hash, seed)`.
+- Every run writes a **manifest**: those four identifiers plus the full resolved parameter list. Two runs that differ have a diffable reason.
+- The event log is complete and replayable. Any frame in the 3D view can be traced back to the events that produced it, and any event back to the sequence coordinates and the parameters that fired it.
+
+### 3.5 What "as accurate as possible" means operationally
+
+It means this, and nothing vaguer:
+
+1. Exact where the science is exact (L0, L1).
+2. Measured values wherever measurements exist, cited.
+3. Named predictors with published error bars where measurements don't exist.
+4. Loud, run-blocking flags where neither exists.
+5. A validation suite (§12) that numerically compares the simulator's output against published experimental datasets on every commit.
+6. A second, independent implementation (the Python reference lane, §7.3) that the fast implementation is continuously cross-checked against.
+
+---
+
+## 4. The system ladder
+
+Replaces v1's four narrative acts. Each tier is a physical system with real measurements to validate against. Tiers are built in order, and each is genuinely useful on its own.
+
+| Tier | System | Why this rung | Ground truth available | Fidelity ceiling |
 |---|---|---|---|---|
-| P | **Powers of Ten** (prologue) | Zoom from a bacterium to its DNA and back out, which sets up the scales. | Scripted cinematic | Established |
-| **Act I: The Code** |||||
-| 1 | **Letters** | Nucleotides, base pairing, DNA vs. RNA (T↔U, ribose 2′-OH, single vs. double strand). Type a strand; its complement snaps on. | Exact sequence rules; 3D built from the sequence | Established |
-| 2 | **Shapes** | RNA folds into hairpins, stems and loops. Edit the letters and watch it refold live. Compare with a real tRNA structure. | Structure prediction (MFE folding); real PDB structure | Established (prediction is approximate) |
-| 3 | **Running the code** | Transcription + translation step by step in the "genome debugger". Mutate: silent / missense / nonsense / frameshift. Fun fact: *Mycoplasma* reads UGA as tryptophan, not "stop". | Genome compiler + event engine | Established |
-| **Act II: The RNA World** |||||
-| 4 | **Chicken and egg** | *Experiment:* drop a genome into the void and press Run. **Nothing happens.** Why? Ribozymes; the ribosome's RNA core. | Mostly narrated; real structures | Established facts, Hypothesis framing |
-| 5 | **Primordial soup** | Nucleotides link up; copying without enzymes; strands must separate before they can be copied again (heat-cycle slider). | Stochastic reactions + particle visuals | Demonstrated (pieces) |
-| 6 | **RNA that builds RNA** | The E/E′ cross-replicator grows exponentially; polymerase ribozymes; the QT45 story. | Stochastic/ODE + visual proxies | Demonstrated |
-| 7 | **Evolution in a tube** | Mutation + selection; a fidelity slider shows the error threshold (information collapses); parasites appear; lineage tree. | Population simulation with a toy fitness model | Demonstrated + theory |
-| **Act III: Becoming a Cell** |||||
-| 8 | **Bubbles** | Fatty-acid vesicles self-assemble, trap RNA, grow by stealing membrane from their neighbors, and divide. | Agent-based vesicles | Demonstrated (pieces) |
-| 9 | **Parasites and teamwork** | Without compartments, parasites win. With compartments, cooperating replicators survive. | Population in two levels (molecules within vesicles) | Demonstrated + theory |
-| 10 | **The great handoff** | The origin of translation and the genetic code; proteins take over catalysis, DNA takes over storage; LUCA. Branching cinematic with competing hypotheses. | Narrated, not simulated in detail | Hypothesis / Speculative |
-| **Act IV: A Living Cell** |||||
-| 11 | **Meet the minimal cell** | Tour JCVI-syn3A's genome by function. Nearly a third of the genes had *unknown function* when the minimal cell was first published. | Explorer | Established |
-| 12 | **Booting a genome** | Genome transplantation: the same DNA that did nothing in the void comes alive inside a cell. | Cinematic + simulation | Established |
-| 13 | **One cell becomes two** | A full cell cycle: gene expression, metabolism, DNA replication, growth and division. Knock out genes and see what breaks. | Simplified whole-cell hybrid model | Established (heavily simplified) |
-| E | **Epilogue** | "Now it's your turn." The full Lab unlocks. | — | — |
+| **T0** | **Sequence semantics** — no physics, just the code | Exact. Transcription, translation, ORF finding, recoding events, restriction/annotation. | Annotated reference genomes; UniProt protein sequences | **Exact** |
+| **T1** | **Reconstituted cell-free expression** (PURE-type): defined mix of purified components in a tube | Every component and concentration is known. No unknown genes, no cell context, no hidden regulation. Published mechanistic models validated against measured time courses. | Published expression time courses, fluorescence assays | **Quantitative, ~within experimental error** |
+| **T2** | **Encapsulated cell-free**: the same mix inside a lipid vesicle | Adds a membrane, finite volume, resource depletion, osmotic effects. Still fully defined chemically. | Synthetic-cell literature | **Quantitative with larger bars** |
+| **T3** | **Whole minimal cell** (JCVI-syn3A → later *E. coli*) | A real, living, sequenced, extensively modeled organism with published whole-cell simulations to compare against. | Doubling time, proteomics, essentiality data, published model outputs | **Semi-quantitative** |
+| **T4** | **Populations and evolution** | Mutation, selection, lineages. Uses T1–T3 as the fitness evaluator. | Long-term evolution experiments, directed evolution data | **Qualitative to semi-quantitative** |
+| **T5** | **Speculative scenarios** (RNA world, alternative genetic codes, designed genomes) | Runs on the same engine, clearly labeled. Now optional content rather than foundation. | Little to none — labeled accordingly | **Illustrative only** |
 
-> **Key scoping decision:** we **simulate what's well understood** (chapters 1–9 and 11–13) and **narrate what's speculative** (chapter 10), with clear labels.
-
-### 2.5 The core interaction loop
-
-```
-Observe  →  Run  →  Inspect  →  Edit  →  Re-run / Compare
-  3D         ▶       click any     mutate,     A/B view with
-  scene    step,     molecule,     insert,     sequence diff +
-           speed     read card     knock out   outcome diff
-```
-
-### 2.6 Non-goals (at least for v1)
-
-- Atom-level physics (molecular dynamics) or life "emerging" from raw chemistry without guidance.
-- Predicting the 3D structure or function of *arbitrary new* proteins (we use a curated parts library plus clearly labeled heuristics; see §6.5).
-- Eukaryotic cells (nucleus, organelles) and multicellular development.
-- Wet-lab functionality (primer design, codon optimization for synthesis, ordering DNA). Editing in Primordia acts on **simulated, curated/toy models** and is for learning.
-- Multiplayer or real-time collaboration.
+**T1 is the flagship.** If Primordia does nothing else well, "load a plasmid, put it in a defined cell-free mix, watch the genetic code run at nucleotide resolution, and get a protein yield curve that matches published measurements" is a real and defensible product.
 
 ---
 
-## 3. Recommendations: things worth adding
+## 5. The core: a sequence-level expression simulator
 
-You covered the core vision. These are gaps I'd fill, roughly in order of importance:
+This is the heart of the app and where most of the engineering goes. The design goal: **simulate the physical events, not their statistical summary.** Aggregate behavior (yields, rates, noise) should *emerge* from mechanism rather than being fitted.
 
-1. **Proteins and membranes are half the story.** DNA/RNA are the code, but proteins and lipids are most of the "output". The plan treats them as first-class.
-2. **Evolution as its own mode.** Running one genome doesn't build complexity; populations do. Chapter 7, chapter 9 and the Lab's "Evolve" tool cover this.
-3. **An honesty layer.** Origin-of-life science is contested, and misconceptions spread easily (e.g. "DNA is a blueprint that builds the body"). Evidence labels + "What we simplified" + references fix this.
-4. **The "naked DNA does nothing" moment.** One scene that directly confronts the most common misconception and sets up the RNA world.
-5. **Scale and time awareness.** Molecules move in nanoseconds; a cell cycle takes ~2 hours. A permanent scale bar and time readout keep users oriented, with a "Powers of Ten" zoom ladder.
-6. **Compare mode (A/B).** The best way to learn what an edit did is to see both runs side by side.
-7. **Standard file formats:** FASTA, GenBank, dot-bracket (RNA structure), PDB/mmCIF (3D structures), SBOL Visual glyphs (genetic parts). These connect the app to real science and let advanced users bring their own data.
-8. **Deterministic seeds + shareable links.** Great for classrooms ("everyone press Run with seed 42").
-9. **Accessibility and low-end devices.** School Chromebooks and tablets are a big audience. Quality tiers, reduced motion, colorblind-safe palettes and screen-reader narration of events.
-10. **An expert reviewer.** Recruit a biology teacher or grad student to check each chapter. Cheap, and a big boost to credibility.
-11. **Start with a vertical slice.** One polished end-to-end experience ("Run a gene") before breadth. The ceiling is unlimited, and a thin polished slice is how you avoid drowning.
-12. **Optional AI tutor (later).** "Ask about what you're seeing": a contextual Q&A grounded in the current chapter's content and references. It needs a small backend (to keep the API key private), rate limiting and extra privacy care if minors use it.
-13. **Sound design (later).** Subtle audio cues for events (bonds forming, divisions); maybe sonification of sequences. A cheap way to feel "modern".
-14. **Keep strings translatable from day one (i18n).** Nearly free now, expensive later.
-15. **Privacy-first analytics.** If schools or minors are a target, avoid invasive tracking (COPPA/FERPA-style concerns); use aggregate, cookie-less analytics or none.
+### 5.1 What gets represented
 
----
+```rust
+/// A physical polymer molecule. Each instance is one real molecule.
+pub struct Polymer {
+    pub id: MoleculeId,
+    pub chemistry: Chemistry,          // Dna { strands: 1|2 } | Rna | Protein
+    pub residues: ResidueBuffer,       // packed 2-bit for nucleic acid, 5-bit for protein
+    pub five_prime: EndChemistry,      // triphosphate, monophosphate, cap, ...
+    pub modifications: Vec<Modification>, // methylation, pseudouridine, PTMs
+    pub topology: Topology,            // linear | circular
+}
 
-## 4. UX and visual design
+/// A molecular machine mid-operation: a real, individually tracked ribosome or polymerase.
+pub struct Machine {
+    pub id: MachineId,
+    pub kind: MachineKind,             // RnaPolymerase | Ribosome30S | Ribosome70S | Rnase | ...
+    pub substrate: MoleculeId,
+    pub position: u32,                 // nucleotide index — this is the "program counter"
+    pub state: MachineState,           // which step of the catalytic cycle
+    pub nascent: Option<MoleculeId>,   // the chain being built
+}
 
-### 4.1 Layout (desktop)
-
-```
-+---------------------------------------------------------------------------+
-| (o) Primordia   Journey > Act II > 6. RNA that builds RNA    [Cmd-K] [?]  |
-+-----------+-------------------------------------------+-------------------+
-| Chapter   |                                           | Inspector         |
-| outline   |              3D VIEWPORT                  | ----------------- |
-| --------- |       (the void + molecules)              | E' ligase         |
-| [x] Intro |                                           | RNA - 61 nt       |
-| [>] Try it|                                           | Evidence: LAB     |
-| [ ] Check |                               +-------+   | What is this?     |
-|           |          scale ladder ->      | 10 nm |   | [Fold] [Edit]     |
-|           |                               +-------+   | References (2)    |
-+-----------+-------------------------------------------+-------------------+
-| |<<  >  ||  >| step    speed o------  1 s = 3 min sim   t = 00:41:07      |
-+---------------------------------------------------------------------------+
-| 5'-GGAC|UUCG|GUCC-AUG GCU ...   [ code panel: sequence + features + PC ^ ]|
-| E 1,204 ._-=#   E' 1,187 ._-=#   substrates 8.1k #=-_.   [plots v]        |
-+---------------------------------------------------------------------------+
+/// Well-mixed small-molecule pools, tracked as exact integer counts.
+pub struct Pools {
+    pub counts: HashMap<SpeciesId, u64>, // ATP, GTP, each of 20 amino acids,
+                                         // each tRNA isoacceptor charged/uncharged, Mg2+, Pi, ...
+    pub volume: Volume,
+}
 ```
 
-- **Tablet/phone:** the side panels become bottom sheets; the transport bar stays pinned; the code panel collapses into a swipeable strip.
-- **Command palette (Cmd/Ctrl-K)** for everything: "fold", "mutate position 42 to A", "go to chapter 6", "reset camera".
+Three things follow from tracking real individual molecules rather than concentrations:
 
-### 4.2 The "genome debugger" metaphor
+- **Resource limitation emerges.** Run out of a specific charged tRNA and ribosomes stall at that codon — you don't model the stall, you observe it.
+- **Noise emerges.** Expression variability comes from the stochastic events, not from an added noise term.
+- **Queueing emerges.** Ribosomes physically occupy ~30 nucleotides of mRNA and cannot pass each other, so polysome traffic jams appear on their own.
 
-This is the signature interaction, and it maps directly onto "run the code":
+### 5.2 Transcription, modeled at the step level
 
-- **Code panel:** the sequence rendered like source code with *syntax highlighting* for features (promoter, RBS, CDS, terminator, operator), codon grouping and both strands.
-- **Program counter:** a caret in the code panel that follows the RNA polymerase or ribosome in 3D. Clicking either one selects the other.
-- **Breakpoints:** click a feature or codon to pause when the machinery reaches it.
-- **Step granularity:** *event* / *nucleotide* / *codon* / *gene* / *N seconds*.
-- **Watch panel:** live counts (mRNA, protein, replicators) with sparklines.
-- **Process list** (like a thread list): every active polymerase or ribosome and where it is.
-- **Source map:** every simulated event links back to sequence coordinates, so "what line is running" is always visible.
+Each arrow is a rate constant with provenance. Steps in **bold** are commonly omitted by simpler models, and each one matters quantitatively:
 
-### 4.3 Scale and time: "semantic zoom"
+```
+free RNAP
+  → promoter search / non-specific DNA binding      k_on  (sequence-scored or measured)
+  → closed complex
+  → open complex formation (DNA melting, ~12–14 bp) k_open
+  → **abortive initiation cycles** (2–15 nt products, often many per productive escape)
+  → promoter escape                                  k_escape
+  → elongation complex
+      per nucleotide: NTP binding → catalysis → translocation
+      **sequence-dependent pausing** (from measured pause maps where available)
+      **backtracking and cleavage-factor rescue**
+      **misincorporation and proofreading** (sets the real error rate)
+  → termination:
+      intrinsic (GC-rich hairpin + U-tract) — hairpin folding evaluated by the folding module
+      factor-dependent (Rho) where the environment contains it
+  → release, RNAP recycles
+```
 
-The scales run from ångströms to micrometers (4+ orders of magnitude) and from nanoseconds to hours. Instead of one continuous zoom, the app uses **discrete semantic levels**. Each level changes what's drawn *and* which model is shown:
+### 5.3 Translation, modeled at the step level
 
-| Level | Typical size | What you see | Driven by |
-|---|---|---|---|
-| Atomic | 0.1–1 nm | Atoms, hydrogen bonds | Real PDB coordinates / idealized templates |
-| Molecular | 1–10 nm | Nucleotides, residues, helices, folds | Geometry built from the sequence + a simple chain physics model |
-| Machine | 10–50 nm | Polymerases, ribosomes, ribozymes at work | Event-driven animation from simulation events |
-| Network | abstract | Circuits, pathways, plots | ODE / stochastic simulation (SSA) state |
-| Cell | 0.1–1 µm | Membrane, crowded cytoplasm, chromosome | Counts + agents + coarse polymer |
-| Population | µm–mm | Many protocells or cells | Agent-based evolution |
+```
+free 30S + initiation factors
+  → mRNA binding at the ribosome binding site   k_init (predictor or measured; see §8.2)
+  → start codon selection, initiator tRNA
+  → 50S joining → elongating 70S
+  → per codon (the elongation cycle):
+        ternary complex (EF-Tu·GTP·aa-tRNA) sampling — rate depends on the
+          **current charged level of that specific isoacceptor**
+        codon–anticodon proofreading → accommodation or rejection
+        peptidyl transfer
+        EF-G-driven translocation
+        **occlusion**: the ribosome covers ~30 nt; trailing ribosomes queue (a TASEP process)
+        **programmed frameshifting** at slippery sequences with downstream structure
+  → termination at a stop codon via release factors
+        **stop-codon readthrough** at a low, context-dependent rate
+  → ribosome recycling
+  → nascent chain: cotranslational folding (as a state machine, not physics),
+        N-terminal methionine excision, signal peptide handling
+```
 
-The **scale ladder** (right edge) shows the current level and the neighboring ones; click to jump. Transitions cross-fade detail in and out.
+**Why this level of detail is the right call:** these are precisely the steps where "sequence" turns into "rate." A model that lumps translation into one Michaelis–Menten term cannot tell you why a rare-codon cluster slows a gene down, because it has thrown away the codons. Since the genetic code is the whole subject of the app, the codons have to stay.
 
-**Time:** the HUD always shows `simulated time`, `speed` (sim seconds per real second) and a **slow-motion** badge when the Director slows things down to show a single event.
+### 5.4 Degradation, because steady state needs a sink
 
-### 4.4 Art direction
+- mRNA: endonucleolytic cleavage (sequence- and structure-dependent where data exists), then exonucleolytic decay. Ribosome occupancy protects mRNA — an emergent coupling between translation and stability that falls out for free.
+- Protein: first-order decay plus, where relevant, energy-dependent proteolysis with degron recognition.
 
-- **The void:** a deep, near-black gradient with subtle depth fog and very faint drifting "solvent" particles (densest at molecular zoom, so there's a sense of water). Optional reference grid and scale bar.
-- **Style:** inspired by Goodsell. Flat-to-soft shading, strong silhouettes, ambient occlusion for depth, gentle bloom only on "active" things (catalysis, bond formation). Glass-like membranes with a fresnel edge.
-- **Color semantics (consistent across the whole app):**
-  - Bases use the **Okabe–Ito** colorblind-safe palette, and are *always* paired with a letter glyph at close zoom: A `#009E73` (green), T/U `#D55E00` (vermillion), G `#E69F00` (orange), C `#0072B2` (blue).
-  - Backbones are neutral warm grey. Proteins are colored by role (polymerases, ribosome, regulators, metabolic enzymes). Lipids are pale cream.
-  - UI accent colors never reuse base colors.
-- **Typography:** Inter (UI) + JetBrains Mono or IBM Plex Mono (sequences).
-- **Motion:** purposeful easing. The Director camera glides to frame events but can always be overridden. Reduced-motion mode swaps glides for cuts.
+### 5.5 Scheduling
 
-### 4.5 Controls
+A hybrid engine, partitioned automatically by species count and timescale — the same strategy the published whole-cell models use:
 
-| Action | Mouse / touch | Keyboard |
+| Method | Used for | Why |
 |---|---|---|
-| Orbit / pan / zoom | drag / right-drag / wheel; 1-finger / 2-finger / pinch | arrows, +/- |
-| Focus selection | double-click / double-tap | `F` |
-| Play / pause | ▶ button | `Space` |
-| Step | step button | `→` (with Shift for bigger step) |
-| Speed | slider | `[` / `]` |
-| Toggle Director camera | camera icon | `C` |
-| Undo / redo edits | — | `Cmd/Ctrl-Z` / `Shift-Cmd/Ctrl-Z` |
-| Command palette | — | `Cmd/Ctrl-K` |
+| **Exact stochastic simulation** (Gillespie direct → next-reaction method) | Low-count species, machine state transitions | Correct when molecule numbers are small, which is when randomness actually matters |
+| **Tau-leaping** | Mid-count species | ~10–100× faster, with an error bound |
+| **Deterministic ODE** (adaptive Runge–Kutta) | Large pools (NTPs, amino acids) | Smooth, high-count, no meaningful noise |
+| **Fixed-step machine stepping** | Ribosome/RNAP position updates | A machine is a state automaton on a lattice; stepping it is cheaper than a full event queue |
+| **Spatial (optional, later tiers)** | Reaction–diffusion where geometry matters | Lattice-based (RDME) for speed, particle-based for detail |
 
-### 4.6 Accessibility
+The partitioning is automatic but **inspectable and overridable**, and the choice is recorded in the run manifest, because switching method can change results and that must never be silent.
 
-- WCAG 2.2 AA for all 2D UI; full keyboard navigation, including **selecting 3D entities from an accessible list** (Tab through "things in view").
-- An **event narration** live region ("Ligation: a new E′ molecule was formed") for screen readers, with a verbosity setting.
-- Colorblind-safe palette plus glyphs; reduced motion; text scaling; captions for any audio.
-- Performance tiers so low-end devices get a smooth experience (see §5.10).
+### 5.6 The genome compiler
+
+The path from a file to a runnable system:
+
+```
+GenBank / FASTA / GFF
+  → parse, validate (IUPAC ambiguity codes, circularity, coordinate conventions)
+  → resolve annotations: keep supplied features; optionally augment with detection
+        promoters      (position weight matrices, scored; flagged Predicted)
+        ribosome sites (thermodynamic initiation-rate model; flagged Predicted)
+        ORFs           (six-frame, alternative starts, correct translation table)
+        terminators    (hairpin + U-tract, scored by the folding module)
+  → build the molecular parts list: every RNA and protein this sequence encodes
+  → bind parameters: for each part, look up Measured → else Predicted → else flag Assumed
+  → emit: a runnable system + a Capability Report (§6) + a source map
+```
+
+The **source map** is what makes the whole thing debuggable: every simulated event points back to exact sequence coordinates, so the 3D view, the event log and the sequence editor stay in lockstep. Click a ribosome in 3D, the editor highlights the codon it's reading; set a breakpoint on a codon, the simulation stops when a ribosome reaches it.
 
 ---
 
-## 5. Technical architecture
+## 6. The Capability Report
 
-### 5.1 Platform decision
+**Directly answers your "or, hopefully, anything it actually can."**
 
-| Option | Pros | Cons | Verdict |
-|---|---|---|---|
-| **Web: TypeScript + React + three.js (React Three Fiber)** | Runs everywhere, shareable links, best UI/text/accessibility tools, huge ecosystem, installable as PWA, can be wrapped as desktop app (Tauri) later, WebXR for VR later | Must manage performance carefully; GPU compute is newer on the web | **Recommended** |
-| Unity (C#) | Great 3D tools and editor | Heavy web builds, weaker for rich text/UI and accessibility | Consider only if you already know Unity |
-| Godot (GDScript/C#) | Open source, light | Smaller UI ecosystem; web export less polished | Viable alternative |
-| Unreal | Top visuals | Overkill; poor fit for web; steep learning curve | No |
-| Native (Swift/Kotlin/C++) | Maximum performance | Several platforms to maintain | No |
+When you import a genome, before running anything, the app produces a report:
 
-### 5.2 Stack
+```
+Imported: Escherichia coli K-12 MG1655 (U00096.3)
+  4,641,652 bp · 4,494 annotated features · translation table 11
 
-Use current stable versions when the project starts.
+WHAT THIS SEQUENCE ENCODES                    (Tier 0 — exact)
+  4,298 protein-coding genes  →  protein sequences derived exactly
+    179 RNA genes             →  22 rRNA, 86 tRNA, 71 other
+      of which 3 use programmed frameshifting (annotated) — handled
+      of which 1 uses selenocysteine recoding — handled
+
+WHAT I CAN SIMULATE QUANTITATIVELY            (Tier 1 — measured parameters)
+    412 genes with measured promoter strength              9%
+    338 genes with measured initiation rate                8%
+  1,051 genes with measured mRNA half-life                24%
+    892 proteins with measured abundance                  21%
+
+WHAT I MUST PREDICT                           (amber — error bars apply)
+  3,886 promoters      via PWM scoring         typical error: large, poorly characterized
+  4,160 init. rates    via thermodynamic model  ~53% within 2×, ~91% within 10×
+  3,447 mRNA half-lives via sequence features   order-of-magnitude
+
+WHAT I CANNOT DO                              (red — honest gaps)
+  - Enzymatic rate constants for 3,905 of 4,298 proteins: no measured kcat/Km
+  - Regulatory logic for 2,190 genes: transcription-factor binding incompletely mapped
+  - 1,412 proteins have no experimentally verified function
+  → Whole-cell growth simulation for this organism is NOT supported.
+    Supported at Tier 3: JCVI-syn3A only.
+
+RECOMMENDED USE
+  ✓ Tier 0 analysis of any gene here
+  ✓ Tier 1 cell-free expression of any single gene or small construct
+  ✗ Tier 3 whole-cell simulation — use syn3A
+```
+
+Two reasons this matters more than it looks:
+
+1. **It makes the app's honesty structural rather than rhetorical.** You can't accidentally over-trust a result, because the app told you its coverage before you pressed run.
+2. **It's genuinely useful output on its own.** "Which parts of this genome do we actually have numbers for?" is a real question with no convenient tool to answer it.
+
+---
+
+## 7. Architecture
+
+### 7.1 Platform decision: Tauri 2
+
+Given desktop-first, accuracy-first, and AI doing most of the coding:
+
+| Option | Verdict |
+|---|---|
+| **Tauri 2** (Rust backend + system WebView frontend) | **Recommended.** The Rust backend *is* the simulation core — no bridge needed. Reported bundles are single-digit to low-tens of MB against Electron's 100+ MB, with correspondingly lower memory and startup cost (published comparisons vary; the order of magnitude is consistent). Built-in **sidecar** support cleanly manages the bundled Python process. Keeps a future web build possible via WASM. |
+| Electron | Same UI ecosystem, much heavier, and no natural home for a Rust core. |
+| Native Rust + wgpu (egui/Bevy) | Fastest and cleanest in principle, but you lose the mature text/UI ecosystem — and this app is UI-heavy (sequence editor, tables, plots, citations). |
+| Python + Qt | Best scientific library access, worst rendering and packaging. Use Python as a *sidecar*, not the shell. |
+
+### 7.2 The two-lane design
+
+This is the structural expression of §3.5, and I consider it the most important architectural decision in the plan.
+
+```
+┌─ FAST LANE ──────────────────┐        ┌─ REFERENCE LANE ─────────────────┐
+│ Rust core                    │        │ Python sidecar                   │
+│ • deterministic, bit-exact   │◄─ CI ─►│ • ViennaRNA, BioPython, COBRApy  │
+│ • multithreaded, interactive │ cross- │ • scipy, numpy                   │
+│ • ships in the app           │ check  │ • slow, authoritative            │
+│ • 60 fps target              │        │ • the oracle we test against     │
+└──────────────────────────────┘        └──────────────────────────────────┘
+```
+
+- The **fast lane** is what you interact with. Rust, deterministic, compiled into the Tauri backend.
+- The **reference lane** is what proves the fast lane is right. It uses the established scientific Python stack, runs offline, and is the source of truth in disputes.
+- **CI runs both on the same inputs and fails if they diverge beyond a declared tolerance.** That test is the app's definition of "accurate."
+
+The reference lane also does the jobs Python is simply better at: genome import pipelines, structure preprocessing, Blender asset baking (§9), and running heavyweight external simulators when you want a gold-standard comparison.
+
+### 7.3 Stack
 
 | Concern | Choice | Notes |
 |---|---|---|
-| Language | **TypeScript** (strict) | Shared types between UI, simulation and content |
-| Build | **Vite** + **pnpm workspaces** | Fast dev server; a monorepo keeps packages cleanly separated |
-| UI | **React** + **Radix UI** primitives + **Tailwind CSS** (shadcn/ui style) | Accessible, modern, themeable |
-| UI motion | Motion (formerly Framer Motion) | Panel and card transitions |
-| 3D | **three.js** via **React Three Fiber** + **drei** | `CameraControls` for smooth Director moves; `Instances` for crowds |
-| Renderer | **WebGL2 baseline, WebGPU as progressive enhancement** | Decide with a 1–2 day spike in Phase 0 (ADR-001). WebGPU unlocks GPU compute for particles and chain physics |
-| Post-processing | `@react-three/postprocessing` (N8AO ambient occlusion, bloom, depth of field, selection outline) | Disabled per quality tier |
-| App state | **Zustand** | UI state only; simulation state lives in the worker |
-| Worker bridge | **Comlink** + transferable `ArrayBuffer`s | Zero-copy frame updates |
-| Sequence editor | **CodeMirror 6** with a custom DNA/RNA language mode | Handles very long documents; decorations for features and program counter |
-| Charts | **uPlot** (live time series) + small custom SVG sparklines | Fast enough for streaming simulation data |
-| Content | **MDX** (narration with embedded interactive components) + **YAML** scenarios, validated with **Zod** | Authors can write chapters without touching engine code |
-| RNA folding | Own **Nussinov** (teaching) → **ViennaRNA compiled to WebAssembly** (accuracy) | Check the ViennaRNA license terms first (free for research/education; check terms for other uses) |
-| Hot loops (if needed) | **Rust → WebAssembly** (`wasm-bindgen`) | Only when benchmarks demand it; also gives bit-identical results across platforms |
-| Storage | IndexedDB (Dexie) for local projects; compressed URL for sharing | No backend needed until accounts/classrooms |
-| Testing | **Vitest** (+ fast-check property tests), **Playwright** (end-to-end + visual snapshots) | See §9 |
-| Lint/format | ESLint + Prettier (or Biome) | — |
-| CI/CD | GitHub Actions → static hosting (Cloudflare Pages / Vercel / GitHub Pages) | Preview deploy per PR |
-| Offline | `vite-plugin-pwa` | Classrooms with bad Wi-Fi |
+| Shell | **Tauri 2** | Sidecar for Python; native menus; auto-update later |
+| Core language | **Rust** (stable, `#![forbid(unsafe_code)]` in the sim crates) | Determinism, speed, and it's the Tauri backend anyway |
+| Numerics | `libm` for transcendentals; `uom` or a hand-rolled newtype layer for **compile-time unit checking** | Dimensional errors become type errors — cheap insurance for a scientific tool |
+| RNG | `rand_xoshiro`, explicitly seeded, one stream per subsystem | Reproducibility |
+| UI | **TypeScript + React + Tailwind + Radix** | Mature, and the UI is text-heavy |
+| 3D | **three.js** via **React Three Fiber** + drei | WebGL2 baseline; WebGPU as an enhancement once the WebView supports it broadly |
+| Sequence editor | **CodeMirror 6** with a custom nucleic-acid mode | Handles megabase documents; decorations for features and the program counter |
+| Plots | **uPlot** | Handles streaming series and ensemble bands efficiently |
+| IPC | Tauri **Channels** with binary payloads | Streams simulation frames without JSON overhead |
+| Python sidecar | **3.12+**, pinned with `uv`, bundled via PyInstaller or a relocatable venv | Optional at runtime: the app degrades gracefully if absent |
+| Audio | **Web Audio API** (procedural) | §10 |
+| Storage | **SQLite** (parameters, runs, citations) + flat files for genomes/structures | Queryable provenance database; trivially diffable exports |
+| Testing | `cargo test` + `proptest`; `pytest`; **Vitest**; **Playwright** | §12 |
+| CI | GitHub Actions: build all three platforms, run the validation suite | |
 
-### 5.3 High-level architecture
-
-```mermaid
-flowchart LR
-  subgraph MAIN["Main thread"]
-    UI["React UI<br/>panels, code editor, charts"]
-    Store["App store (Zustand)"]
-    Director["Director<br/>picks events to show, drives camera"]
-    Scene["3D scene<br/>React Three Fiber / three.js"]
-    UI <--> Store
-    Store --> Director
-    Director --> Scene
-    Store --> Scene
-  end
-  subgraph WORKER["Simulation worker"]
-    Compiler["Genome compiler"]
-    Fold["RNA folding (WASM)"]
-    Engine["Sim engine<br/>rules, SSA, ODE, agents"]
-    Log["Event log + snapshots"]
-    Compiler --> Engine
-    Fold --> Engine
-    Engine --> Log
-  end
-  Content[("Content<br/>chapters MDX + scenarios YAML")]
-  Assets[("Assets<br/>structures, textures")]
-  Store -- "commands" --> Engine
-  Engine -- "state deltas + events" --> Store
-  Content --> UI
-  Content --> Compiler
-  Assets --> Scene
-```
-
-**The key idea is to keep simulation and view apart.** The simulation is the source of truth and knows nothing about rendering. The view shows **visual proxies** for a sample of simulation entities near the camera, and shows everything else in aggregate. That's how one app can cover "one ribosome up close" and "500 ribosomes in a cell" (§6.3).
-
-### 5.4 Repository layout
+### 7.4 Repository layout
 
 ```
 primordia/
-  apps/
-    web/                       # the React + R3F app
-      src/
-        app/                   # routes, layout, providers
-        features/
-          viewer/              # 3D viewport, camera, selection
-          code-panel/          # CodeMirror sequence editor, features, program counter
-          transport/           # play/pause/step/speed/seek, time HUD
-          inspector/           # entity cards, evidence badges, references
-          journey/             # chapter runner (MDX + scenario + goals)
-          lab/                 # sandbox benches, compare mode
-          challenges/
-        scene/                 # R3F components: helix, strands, proteins, membranes, crowds
-        workers/sim.worker.ts  # hosts sim-engine
-  packages/
-    bio-core/                  # pure TS, no dependencies: alphabets, genetic codes, pairing,
-                               # reverse complement, translation, ORF/promoter/RBS finding,
-                               # FASTA/GenBank/dot-bracket parsers
-    fold/                      # nussinov.ts, energy model, vienna-wasm/ (build + bindings)
-    sim-engine/                # entity store, rules, SSA/tau-leap/ODE/PBD, RNG, snapshots,
-                               # event log, worker protocol, genome compiler
-    render-kit/                # helix geometry, instanced nucleotide meshes, impostor shaders,
-                               # LOD, membrane shader, crowd renderer
-    content/                   # chapters/*.mdx, scenarios/*.yaml, glossary, references.bib
-    ui/                        # design system (tokens, components)
-  tools/
-    pdb-import/                # build-time: download mmCIF -> compact binary + coarse beads
-    content-lint/              # checks every chapter has objectives, evidence, references
+  crates/
+    primordia-seq/         # alphabets, translation tables, recoding, parsing, ORFs
+    primordia-params/      # provenance-typed parameter store, units, uncertainty
+    primordia-fold/        # RNA secondary structure (own impl + optional ViennaRNA FFI)
+    primordia-sim/         # entities, machines, processes, schedulers, event log, snapshots
+    primordia-genome/      # the genome compiler + Capability Report
+    primordia-io/          # GenBank/FASTA/GFF/SBML/SBOL import-export
+    primordia-app/         # the Tauri backend: commands, channels, run manager
+  ui/                      # React + R3F frontend
+    src/
+      viewport/            # 3D scene, camera, picking, LOD
+      sequence/            # CodeMirror editor, feature track, program counter
+      inspector/           # entity cards, provenance badges, citations
+      run/                 # transport controls, ensemble config, manifest viewer
+      report/              # Capability Report, validation dashboard
+      plots/
+  reference/               # Python reference lane
+    oracle/                # independent implementations for cross-checking
+    ingest/                # genome, structure and parameter import pipelines
+    validate/              # published-dataset comparisons
+  assets/
+    bake/                  # Blender + Molecular Nodes scripts (see SETUP_GUIDE.md)
+    baked/                 # generated glTF/KTX2 output (git-lfs or regenerated)
+  data/
+    parameters.sqlite      # the provenance database
+    citations.bib
+    genomes/               # reference genomes with annotations
+    structures/            # preprocessed PDB/AlphaFold entries
   docs/
-    adr/                       # Architecture Decision Records (ADR-001 renderer, ...)
-    science/                   # per-chapter notes, parameter sources, reviewer sign-offs
+    adr/                   # architecture decision records
+    science/               # per-module parameter notes and derivations
 ```
-
-> This repo (`personal`) currently holds only this plan. I suggest giving Primordia its own repository once coding starts.
-
-### 5.5 Threading and message protocol
-
-- **Main thread:** UI, rendering, the Director, and interpolation between simulation frames.
-- **Sim worker:** everything deterministic. It runs ahead of the view by a small buffer and sends compact updates at ~30 Hz.
-- **Optional second worker:** folding and heavy analysis (alignment, lineage trees), so they never block the simulation.
-
-```ts
-// packages/sim-engine/src/protocol.ts
-export type Command =
-  | { type: 'load'; scenario: ScenarioSpec; seed: number }
-  | { type: 'play' }
-  | { type: 'pause' }
-  | { type: 'step'; by: 'event' | 'nucleotide' | 'codon' | 'gene' | { seconds: number } }
-  | { type: 'setSpeed'; simSecondsPerRealSecond: number }
-  | { type: 'edit'; edit: SequenceEdit }            // mutate / insert / delete / knockout
-  | { type: 'seek'; t: number }                     // time travel (snapshot + replay)
-  | { type: 'setBreakpoints'; breakpoints: Breakpoint[] }
-  | { type: 'inspect'; id: EntityId };
-
-export type Update =
-  | { type: 'frame'; t: number; proxies: ProxyBuffer; events: SimEvent[] }  // ProxyBuffer = typed arrays
-  | { type: 'series'; t: number; values: Record<string, number> }         // for charts
-  | { type: 'paused'; reason: 'user' | 'breakpoint' | 'goal'; at?: SourceRef }
-  | { type: 'inspect'; id: EntityId; detail: EntityDetail }
-  | { type: 'error'; message: string };
-```
-
-### 5.6 Core data model
-
-```ts
-// packages/bio-core/src/types.ts
-export type Alphabet = 'DNA' | 'RNA' | 'PROTEIN';
-
-export interface Sequence {
-  id: string;
-  alphabet: Alphabet;
-  residues: string;                  // uppercase, 5'→3' (N→C for protein). Uint8Array for genome-scale.
-  topology: 'linear' | 'circular';
-}
-
-export interface Feature {           // GenBank-like annotation
-  id: string;
-  kind: 'promoter' | 'rbs' | 'cds' | 'terminator' | 'operator'
-      | 'ncRNA' | 'ribozyme' | 'origin' | 'misc';
-  start: number;                     // 0-based, inclusive
-  end: number;                       // exclusive
-  strand: 1 | -1;
-  label?: string;
-  props: Record<string, string | number>;   // strength, product, partId, ...
-}
-
-export interface Genome {
-  id: string;
-  name: string;
-  chromosome: Sequence;              // DNA
-  features: Feature[];
-  geneticCode: 1 | 4 | 11;           // NCBI translation tables (4 = Mycoplasma: UGA = Trp)
-}
-
-export interface RnaStructure {
-  dotBracket: string;                // e.g. "((((....))))"
-  pairs: Int32Array;                 // pairs[i] = j or -1
-  energy?: number;                   // kcal/mol (when computed with an energy model)
-}
-```
-
-```ts
-// packages/sim-engine/src/types.ts
-export type Evidence = 'established' | 'demonstrated' | 'hypothesis' | 'speculative';
-
-export interface SimEvent {
-  t: number;                         // simulated seconds
-  rule: string;                      // e.g. 'ligation', 'transcription.initiate'
-  reactants: EntityId[];
-  products: EntityId[];
-  compartment?: CompartmentId;
-  source?: SourceRef;                // sequence coordinates → code panel highlight
-  salience: number;                  // 0..1: how interesting for the Director
-  caption?: ContentKey;              // optional narration hook
-}
-
-export interface Rule<S> {
-  id: string;
-  evidence: Evidence;
-  /** Total rate (events per simulated second) in the current state. */
-  propensity(state: S): number;
-  /** Choose concrete reactants and apply the change. May only use ctx.rng for randomness. */
-  fire(state: S, ctx: FireContext): SimEvent;
-}
-```
-
-### 5.7 Scenario format
-
-Scenarios are declarative, so content authors can create and tune chapters without engine changes. Example for chapter 6. The rules follow the Lincoln & Joyce scheme: **E′ joins A + B into a new E; E joins A′ + B′ into a new E′; the resulting pair then separates.**
-
-```yaml
-# packages/content/scenarios/rna-world/cross-replicators.yaml
-id: rna-world/cross-replicators
-title: Two RNAs that build each other
-chapter: 6
-evidence: demonstrated
-references: [lincoln-joyce-2009]
-simplifications:
-  - Sequences are shortened stand-ins, not the published ones.
-  - Rates are sped up so growth is visible in minutes; the HUD shows real-time equivalents.
-compartment: { kind: well-mixed, volumeFemtoliters: 1 }
-species:
-  E:    { kind: rna, role: ligase, display: { length: 61 } }
-  Ep:   { kind: rna, role: ligase, display: { length: 61 } }
-  A:    { kind: rna, role: substrate, fragmentOf: E }
-  B:    { kind: rna, role: substrate, fragmentOf: E }
-  Ap:   { kind: rna, role: substrate, fragmentOf: Ep }
-  Bp:   { kind: rna, role: substrate, fragmentOf: Ep }
-  E_Ep: { kind: complex, of: [E, Ep] }
-initial: { E: 10, Ep: 10, A: 5000, B: 5000, Ap: 5000, Bp: 5000 }
-rules:                                   # illustrative rate constants; fit to published curves in Phase 3
-  - { id: build-E,  reactants: [Ep, A, B],  products: [E_Ep], rate: 1.0e-6, salience: 0.9 }
-  - { id: build-Ep, reactants: [E, Ap, Bp], products: [E_Ep], rate: 1.0e-6, salience: 0.9 }
-  - { id: separate, reactants: [E_Ep],      products: [E, Ep], rate: 0.05,  salience: 0.3 }
-view:
-  camera: { focus: E, preset: close-up }
-  charts: [[E, Ep], [A, B, Ap, Bp]]
-goals:
-  - when: "count(E) >= 1000"
-    say: chapter6.exponential           # key into the MDX narration
-    unlock: lab.replicator-bench
-```
-
-### 5.8 Rendering
-
-**a) Helices from the sequence (DNA/RNA at any length).** Each nucleotide is an *instance*. Its transform is computed from the helix parameters, ideally in the vertex shader from `instanceIndex`, so millions of nucleotides cost almost no CPU:
-
-```
-B-DNA (per base pair i, in Å):
-  twist θ = 2π / 10.5     (~34.3° per bp)
-  rise  h = 3.38
-  phosphate radius r ≈ 8.9
-  strand 1 phosphate:  P1(i) = ( r·cos(iθ),       r·sin(iθ),       i·h )
-  strand 2 phosphate:  P2(i) = ( r·cos(iθ + φ),   r·sin(iθ + φ),   i·h )
-  φ ≈ 140–160° instead of 180° produces the major and minor grooves (tune by eye against 1BNA)
-  base-pair slab: spans P1→P2 through the axis region, colored per base, with a glyph at close zoom
-
-A-RNA (double-stranded stems): ~11 bp/turn, rise ~2.6–2.8 Å, base pairs pushed off-axis (hollow core)
-ssRNA: a chain of beads, shaped by folding (below) and animated by chain physics
-```
-
-**b) Level of detail (LOD):**
-
-| Zoom | DNA/RNA representation |
-|---|---|
-| Far | Colored tube/ribbon; genes as color bands |
-| Mid | "Ladder": backbone ribbons + base-pair rungs colored by base |
-| Near | Nucleotide blocks with letter glyphs |
-| Atomic | Ball-and-stick / space-filling via **ray-cast sphere impostors** (idealized nucleotide templates taken from real structures and placed with helix transforms) |
-
-**c) Flexible strands.** Single strands, mRNA leaving a polymerase and growing protein chains are **chains of beads simulated with position-based dynamics** (distance + bending constraints, gentle Brownian noise). CPU for hundreds of strands; GPU compute (WebGPU) for thousands.
-
-**d) RNA folds in 3D.** 2D structure (dot-bracket) → "schematic 3D": stems become A-form helices, loops become arcs, and a short force-layout relax removes overlaps. It's clearly labeled *schematic*. Real 3D structures (tRNA, ribozymes, ribosome) come from the PDB.
-
-**e) Proteins.** Library proteins use real structures (PDB or AlphaFold DB) that are pre-processed at build time. Rendered as cartoon or surface at mid zoom, and as impostor spheres at atomic zoom. **Folding is shown as a morph** from the extended chain to the known structure, labeled "folding shown schematically".
-
-**f) Membranes and protocells.** A translucent fresnel shell. At close zoom, instanced lipid "sprites" suggest the bilayer. Growth and division use signed-distance-field (SDF) blending, so one vesicle smoothly becomes two.
-
-**g) Crowds (cell interior).** Goodsell-style crowded cytoplasm: thousands of instanced impostors (ribosomes, proteins, metabolites), each class with its own color. Only the proxies near the camera are "live"; the rest are procedural Brownian motion.
-
-**h) Structure pipeline.** `tools/pdb-import` downloads selected entries from RCSB at *build time* and turns them into compact binaries (Float32 positions, element, residue, chain + a coarse bead model). Nothing hits the network at runtime, so the app works offline. Starter set (verify each ID when importing): **1BNA** (B-DNA), **1EHZ** (tRNA-Phe), **1EMA/1GFL** (GFP), plus a hammerhead ribozyme, the class I ligase ribozyme and a bacterial ribosome. PDB data is CC0; AlphaFold DB is CC-BY 4.0 (needs attribution).
-
-**i) Post-processing.** Ambient occlusion (N8AO), subtle bloom for "active" events, depth of field for the Director's focus, selection outlines, AgX/ACES tone mapping. Each effect belongs to a quality tier.
-
-### 5.9 Persistence and sharing
-
-- **Local:** projects (sequences, scenario edits, saved runs) in IndexedDB, autosaved, with undo/redo history.
-- **Share link:** `scenario id + seed + edit list`, compressed into the URL. Replaying rebuilds the exact run (determinism, §6.2).
-- **Files:** import/export FASTA, GenBank, dot-bracket; export images/video clips of the viewport (MediaRecorder); `.primordia` JSON project files.
-- **Later (only if needed):** accounts, class codes and a teacher dashboard on a small backend (e.g. Supabase or similar).
-
-### 5.10 Performance budgets
-
-| Budget | Target |
-|---|---|
-| Frame rate | 60 fps on a reference laptop (Apple M1 / Intel Iris Xe class); 30 fps on "Low" tier (2020-era iPad / Chromebook) |
-| Initial load | < 1 MB gzipped JS for the shell; chapters, WASM and structures lazy-loaded |
-| Draw calls | < 300 per frame (instancing everywhere) |
-| Visible nucleotides | ~100k at "Near" LOD; ~1–2M aggregated at "Far" |
-| Sim throughput | ≥ 100k SSA events/s in TS for count-based chapters; if not met → move the hot loop to Rust/WASM |
-| Quality tiers | Low / Medium / High / Ultra, chosen automatically from GPU tier + measured frame time, overridable |
-
-### 5.11 Security and privacy
-
-- A static site by default, with no personal data collected.
-- If the optional AI tutor ships: calls go through a serverless proxy (the key is never in the client), with rate limits, a content policy and extra care if minors use it.
-- Imported files are parsed in a worker with size limits.
-- `SharedArrayBuffer` (if used) needs COOP/COEP headers on the host.
 
 ---
 
-## 6. Scientific modeling: the hard parts
+## 8. Data layer
 
-### 6.1 Simulation engine
+Accuracy is mostly a data problem, so this deserves more attention than it usually gets.
 
-- **Entity store:** Structure-of-Arrays typed arrays (fast, easy to transfer) plus a **species registry** that stores each distinct sequence once, keyed by a hash.
-- **Rules** (§5.6) with several schedulers:
-  - **Gillespie SSA** (the direct method, then the next-reaction method), for low-count random events. This is correct for small numbers, where randomness *matters* (one ribozyme, one gene).
-  - **Tau-leaping**, for medium counts.
-  - **ODE** (adaptive RK45), for large-count, smooth processes (metabolite pools).
-  - **Fixed-step agents / chain physics**, for vesicles and visual polymers.
-  - **Hybrid partitioning:** each rule is assigned to a scheduler based on its counts and speed. This is the same idea the whole-cell models use.
-- **Network-free mode** for evolution: when new sequences keep appearing, we don't pre-build a reaction network. Each molecule is an agent with a sequence, and rules compute propensities over classes. (Inspired by NFsim/Kappa rule-based modeling.)
+### 8.1 What we need, and where it comes from
 
-### 6.2 Determinism and time travel
-
-- All randomness comes from a seeded PRNG (e.g. xoshiro128\*\*) that lives in the worker. `Math.random` is never used.
-- **Caveat:** `Math.exp`/`Math.log` can differ slightly between browser engines. So: deterministic *within* a browser in TS; bit-identical *across* browsers if the hot loop moves to Rust/WASM with `libm` (decided in Phase 3).
-- **Snapshots** every N events + an **event log**. Seeking = restore the nearest snapshot + replay. This powers the scrubbable timeline, "rewind 10 seconds", breakpoints and shareable runs.
-
-### 6.3 Visual proxies and the Director
-
-- The simulation can hold millions of molecules, but only a few hundred can be *meaningfully* animated.
-- The **focus region** is a sphere around the camera target. Simulation entities inside it get 1:1 **visual proxies**. Outside it they're drawn as aggregated instancing or density; further out, only as counters and charts.
-- The **Director** scores incoming events (salience × novelty × distance to focus) and chooses what to show. It can **slow down (bullet-time)** to animate a single ligation or codon read while the HUD says so. It also offers "follow this molecule", picture-in-picture, and "skip to the next interesting thing".
-- **Choreography:** each rule type has an animation recipe (e.g. `ligation`: substrates diffuse in → align on the template → a flash at the new bond → the pair drifts apart). The recipe gets the event's real participants, so what you see is always *true to the simulation*, just slowed down.
-
-### 6.4 The genome compiler ("run the code")
-
-```
-source (FASTA / GenBank / Lab editor)
-  → parse                        → Genome
-  → annotate                     keep existing features; otherwise detect:
-                                   promoters (position weight matrix scoring for -35 TTGACA /
-                                   -10 TATAAT with a 15–19 bp spacer), RBS (Shine–Dalgarno-like
-                                   motif ~5–9 nt upstream of a start codon), ORFs (6 frames,
-                                   ATG/GTG/TTG starts), terminators (GC-rich hairpin + U-tract)
-  → transcription units          promoter → first terminator downstream
-  → expression program           units, genes, regulatory links (repressor protein ↔ operator site)
-  → rules                        initiation rates from promoter/RBS scores, elongation at real
-                                   speeds, termination, decay, binding (Hill functions from
-                                   operator match scores)
-  → runtime + source map         every event points back to sequence coordinates
-```
-
-Details that make it feel real and teach well:
-
-- **Coupled transcription and translation.** In bacteria, ribosomes start translating mRNA *while it's still being made*. The 3D scene shows ribosomes "chasing" the polymerase.
-- **The genetic code is a lookup table the user can inspect.** Include NCBI tables 1, 4 and 11. Chapter 3 highlights UGA = Trp in *Mycoplasma* (table 4) to show the code isn't perfectly universal.
-- **Mutation classes** are computed and explained live: silent, missense, nonsense, frameshift, promoter/RBS damage (expression drops), operator damage (regulation lost).
-
-### 6.5 Function from sequence (the honest workaround)
-
-Predicting what an *arbitrary* sequence does is an unsolved research problem. We use clearly labeled **toy models** grounded in real theory:
-
-**RNA ("does my ribozyme work?")**, inspired by RNA folding-landscape research (Schuster, Fontana et al.):
-
-```
-activity(seq) = a_max · exp( −d_bp( fold(seq), targetStructure ) / λ ) · coreMatch(seq)
-
-  fold      = predicted minimum-free-energy (MFE) structure (ViennaRNA)
-  d_bp      = base-pair distance between structures
-  coreMatch = 1 if the catalytic core nucleotides are kept, otherwise a heavy penalty
-```
-
-In words: the ribozyme works if it still folds into the right shape and keeps its catalytic core. This gives real *neutral networks* (many sequences, same shape) and realistic *fitness landscapes*, which is exactly the right intuition for Chapter 7. It's labeled "toy function model".
-
-**Proteins:** a curated **parts library** (polymerase, ribosomal proteins, repressors, GFP, metabolic enzymes...) with real structures, annotated key residues and kinetic parameters. An edited coding sequence is translated, aligned to its library parent (Smith–Waterman, BLOSUM62), and classified:
-
-| Change | Activity factor (toy heuristic) |
-|---|---|
-| Synonymous | 1.0 |
-| Missense at an annotated key residue | ~0–0.1 |
-| Missense elsewhere | scaled by BLOSUM62 score (conservative swaps are mild) |
-| Early nonsense (premature stop) | 0 |
-| Frameshift | 0 |
-| In-frame insertion or deletion | reduced, depending on length and location |
-
-A brand-new protein with no library parent is shown as an unstructured chain with "function unknown", which is itself a true and teachable result. (Server-side structure prediction could be a much later, feature-flagged add-on.)
-
-### 6.6 RNA-world models (Chapters 5–7)
-
-- **Template-directed copying:** a template + monomers (or short oligos) → complementary strand. Each nucleotide is added with **error rate ε**. Without enzymes the rate is slow and ε is high; with a polymerase ribozyme present, both improve.
-- **The strand-separation problem:** a finished duplex has to melt before it can be copied again. A **temperature-cycling slider** (think day/night or hydrothermal cycles) lets users discover this for themselves.
-- **Cross-replicator (E/E′):** the scenario in §5.7. Validate exponential growth against the ODE solution.
-- **Error threshold:** Eigen's rough limit, `L_max ≈ ln(σ) / ε`, where σ is the master sequence's growth advantage. A nice built-in "aha": at **QT45's 94.1% fidelity (ε ≈ 0.059)** and σ = 10, `L_max ≈ 2.3 / 0.059 ≈ 39 nt`, right around QT45's own 45 nt. (Illustrative; the app will show this as a live calculator.)
-- **Spiegelman-style selection:** under selection for speed, shorter variants win. Users watch "genomes" shrink.
-- **Parasites:** short sequences that get copied but don't catalyze anything. In a well-mixed pool they take over.
-
-### 6.7 Protocell models (Chapters 8–9)
-
-- **Vesicle state:** membrane amount (surface area A), volume V, and contents (RNA counts by species).
-- **Growth by competition:** vesicles with more RNA inside (higher osmotic pressure) pull fatty acids from their neighbors (Chen, Roberts & Szostak 2004).
-- **Division:** when A exceeds what a sphere of volume V needs, the vesicle stretches into a filament and divides under gentle shear (Zhu & Szostak 2009). Contents are split randomly (binomially).
-- **Multilevel selection:** the stochastic corrector model (Szathmáry & Demeter 1987) and transient compartmentalization (Matsumura et al. 2016). Compartments let cooperating replicators outcompete parasites.
-
-### 6.8 Minimal-cell model (Chapters 11–13)
-
-Target organism: **JCVI-syn3A** (~543 kbp, 493 genes, ~105-minute doubling time, ~400 nm diameter). Parameters come from Breuer et al. 2019, Thornburg et al. 2022/2026 and the public `Minimal_Cell` repository (**check its license before reusing data**).
-
-| Module | State | Method | Notes |
-|---|---|---|---|
-| Gene expression (~500 genes) | mRNA + protein counts per gene | SSA for mRNA; tau-leap/ODE for proteins | Promoter strengths from data where available |
-| Ribosome assembly | rRNA, ribosomal proteins, ribosome count | SSA/ODE | Growth rate depends on ribosome count, a good teaching point |
-| Metabolism | ~10–20 lumped pools (ATP/GTP, NTPs, dNTPs, amino acids, lipids) | ODE | Lumped from the published network; not full flux balance analysis |
-| DNA replication | Replication fork positions | Deterministic + noise | Bidirectional from the origin |
-| Chromosome | Coarse polymer (~1–5 kbp per bead) | Chain physics / Brownian | Mostly visual; roughly constrains segregation |
-| Membrane growth + division | Area, volume, shape | Geometric rules | Divide when replication is complete and area passes a threshold |
-| Crowd (visual) | Positions of ribosomes, proteins | Procedural Brownian | Visual proxies only |
-
-**Gene knockouts:** every gene has a function category and an essentiality flag (from the minimal-cell papers). Turning off an essential gene breaks the matching module (e.g. a ribosomal protein → no new ribosomes → growth stalls), and the app explains *which* process failed and why.
-
-**The "naked genome" and "boot" scenes** (Chapters 4 and 12) reuse this model: the same genome, with no cell machinery, produces zero events. Placed in a recipient cell, it takes over.
-
----
-
-## 7. Content and education framework
-
-### 7.1 Chapter template (MDX + scenario)
-
-Every chapter has:
-
-1. **Learning objectives** (2–4, phrased as "You'll be able to explain...").
-2. **Hook:** a 10–20 second cinematic or question.
-3. **Explore:** a free look at the scene with hotspots.
-4. **Try it:** 2–4 guided interactions with goals the scenario detects (`goals:`).
-5. **Check:** 2–3 quick questions (multiple choice, "predict what happens, then run it", or ordering).
-6. **Go deeper:** references (with plain-language summaries) and Lab links.
-7. **What we simplified:** a required section.
-8. **Evidence badge(s):** required.
-
-### 7.2 Writing guidelines
-
-- Avoid teleology: RNA doesn't "want" to replicate. Say "copies that copy faster become more common".
-- Separate *what happened in a lab* from *what might have happened 4 billion years ago*.
-- Numbers always come with units and sources.
-- A glossary with hover definitions. First use of a term in a chapter links to it.
-
-### 7.3 Curriculum alignment (if targeting schools)
-
-Map chapters to standards, e.g. NGSS **HS-LS1-1** (DNA structure → proteins → functions), heredity and natural-selection standards, and AP Biology units on gene expression and evolution. Add this as metadata in each chapter's frontmatter.
-
-### 7.4 Science review workflow
-
-`docs/science/<chapter>.md` records parameter sources, simplifications and a reviewer sign-off. `tools/content-lint` fails CI if a chapter lacks objectives, an evidence label, references or a "What we simplified" section.
-
----
-
-## 8. Roadmap
-
-Estimates are rough. They assume familiarity with TypeScript (3D can be learned along the way) and include content writing, which often takes as long as the code. AI-assisted development can shorten the coding portions.
-
-| Phase | Theme | Chapters | Solo, part-time (~12 h/week) | Solo, full-time |
-|---|---|---|---|---|
-| 0 | Foundations | — | 2–3 weeks | ~1 week |
-| 1 | Molecule viewer | (1, 2 partly) | 6–8 weeks | ~3 weeks |
-| 2 | **Run the code (MVP / public alpha)** | P, 1, 2, 3 | 8–10 weeks | ~4 weeks |
-| 3 | **The RNA world** | 4, 5, 6, 7 | 10–14 weeks | 5–6 weeks |
-| 4 | Protocells | 8, 9, 10 | 8–10 weeks | ~4 weeks |
-| 5 | The minimal cell | 11, 12, 13 | 16–24 weeks | 8–10 weeks |
-| 6 | Lab & Challenges (full) | Epilogue | ongoing | ongoing |
-| 7 | Extras (AI tutor, classroom, VR, localization) | — | as desired | as desired |
-
-**Up to a living, dividing cell: ~12–18 months part-time, ~6–8 months full-time.**
-
-### Phase 0: Foundations
-
-**Goal:** a skeleton where everything later plugs in cleanly.
-
-- [ ] Monorepo (pnpm + Vite + TS strict), packages as in §5.4, lint/format, Vitest, Playwright
-- [ ] GitHub Actions: typecheck, lint, test, build, preview deploy per PR
-- [ ] **Spike → ADR-001:** R3F with WebGL2 vs. WebGPU renderer on your target devices (1–2 days)
-- [ ] **Spike → ADR-002:** render 100k bp of instanced B-DNA at 60 fps (1–2 days)
-- [ ] **Spike → ADR-003:** build ViennaRNA to WASM + review its license (1 day)
-- [ ] App shell: the void scene, camera controls, quality tiers, performance overlay, layout panels, design tokens, dark theme, i18n scaffold
-- [ ] `bio-core` v0: alphabets, validation, reverse complement, transcription, translation (tables 1/4/11), FASTA parser, with tests
-
-**Done when:** CI is green; the deployed preview shows an empty void you can orbit; `bio-core` passes known-answer tests.
-
-### Phase 1: Molecule viewer
-
-**Goal:** "Look at any sequence in 3D."
-
-- [ ] Helix generator (B-DNA, A-RNA stems, ssRNA chains) + 4-level LOD
-- [ ] Instanced nucleotide rendering; hover/selection picking
-- [ ] Code panel (CodeMirror 6): DNA/RNA mode, feature highlighting, **two-way hover sync with 3D**
-- [ ] Folding: Nussinov (teaching) → ViennaRNA WASM; 2D structure diagram; schematic 3D fold
-- [ ] `tools/pdb-import` + viewer for real structures (tRNA, B-DNA, GFP)
-- [ ] Inspector cards, evidence badges, glossary tooltips
-- [ ] Scale bar + scale ladder + time HUD (static for now)
-
-**Done when:** pasting a 10k-nt sequence renders at 60 fps on the reference laptop; hovering a nucleotide in 3D highlights it in the code panel (and vice versa); a 200-nt RNA folds in < 1 s; 1EHZ (tRNA) loads and renders offline.
-
-### Phase 2: Run the code (MVP / public alpha)
-
-**Goal:** "Press ▶ on a gene and watch a protein get made."
-
-- [ ] `sim-engine` v1: entity store, event-driven scheduler, seeded RNG, snapshots, seek, worker + protocol
-- [ ] Genome compiler (§6.4) with source maps
-- [ ] Choreography: RNA polymerase (binding, a 12–14 bp opening "bubble", elongation, terminator hairpin, release); ribosome (RBS binding, tRNAs delivering amino acids, peptide growth, release); coupled transcription–translation; protein folding morph
-- [ ] Genome debugger UI: program counter, breakpoints, step granularities, watch panel, process list
-- [ ] Mutation tools + live mutation-class explanations; A/B compare (basic)
-- [ ] **Hero demo:** a GFP gene. Run it → the protein glows. Nonsense mutation → no glow.
-- [ ] Journey runner + Prologue + Chapters 1–3 (MDX, goals, checks)
-- [ ] Accessibility pass (keyboard, narration region, reduced motion), save/load, share link
-- [ ] First usability test: 5 people from the target audience, thinking aloud
-
-**Done when:** a new user completes Chapters 1–3 unaided in about 20 minutes; the same seed + edits replays identically; a GFP nonsense mutation truncates the protein, and the app explains why.
-
-### Phase 3: The RNA world
-
-**Goal:** "Watch self-replicating RNA appear and evolve."
-
-- [ ] SSA (direct + next-reaction), tau-leaping, ODE solver; hybrid partitioning; network-free mode
-- [ ] Decide whether to port the hot loop to Rust/WASM (benchmark-driven) → ADR
-- [ ] Director v1: salience scoring, bullet-time, follow-molecule, "skip to interesting"
-- [ ] Soup visuals: thousands of nucleotides, chain-physics strands, template copying, ligation flashes, duplex melting with the temperature slider
-- [ ] Scenarios: non-enzymatic copying, E/E′ cross-replicator, polymerase ribozyme, Spiegelman selection, error threshold, parasites
-- [ ] Toy RNA function model (§6.5) + lineage tree + live charts (uPlot)
-- [ ] Chapters 4–7; Lab: Replicator bench; first Challenges ("fold this shape", "beat the error threshold")
-
-**Done when:** the cross-replicator's growth curve matches the ODE solution within tolerance; the error-threshold demo collapses above the critical ε in ≥ 95% of seeds; a science reviewer signs off on Chapters 4–7.
-
-### Phase 4: Protocells
-
-**Goal:** "Watch RNA get packaged into bubbles that grow, compete and divide."
-
-- [ ] Vesicle agents: self-assembly, encapsulation, osmotic competition, filament growth, division
-- [ ] Membrane rendering (fresnel shell, lipid sprites, SDF division)
-- [ ] Population level: many protocells; stochastic corrector; parasites vs. compartments
-- [ ] Chapters 8–10 (10 is mostly cinematic with branching hypotheses)
-- [ ] Lab: Protocell bench
-
-**Done when:** the "parasites vs. compartments" outcome reproduces qualitatively across seeds; division looks continuous at every LOD; 60 fps with 200 protocells on the reference laptop.
-
-### Phase 5: The minimal cell
-
-**Goal:** "Genome + cell → one cell cycle → two cells."
-
-- [ ] Import the syn3A genome + annotations; function categories; essentiality flags
-- [ ] Modules from §6.8 with parameters from the literature (documented in `docs/science/`)
-- [ ] Cell-scale rendering: crowded cytoplasm, ~500 ribosomes, coarse chromosome, polymerases on DNA, membrane growth, division
-- [ ] "Naked genome" and "genome transplantation" scenes
-- [ ] Gene knockout tool with failure explanations
-- [ ] Chapters 11–13; Lab: Cell bench; Challenge: "minimal genome" puzzle
-
-**Done when:** simulated doubling time lands within ±10% of the tuned target (~105 min of simulated time); knocking out a ribosomal protein gene stalls growth with the right explanation; a reviewer signs off.
-
-### Phase 6: Lab & Challenges (full)
-
-- Parts-based construct builder (SBOL Visual glyphs); circuit bench (toggle switch, repressilator, lac operon); full compare mode; challenge editor; import/export everywhere.
-
-### Phase 7: Extras (pick what you want)
-
-- AI tutor · teacher/classroom mode · localization · WebXR (VR) · desktop app (Tauri) · sound design and sonification · a community gallery of shared scenarios.
-
----
-
-## 9. Testing and quality
-
-| Layer | What | How |
+| Data | Sources to evaluate | Licensing note |
 |---|---|---|
-| `bio-core` | Reverse complement undoes itself; translation of known genes (e.g. GFP) matches the expected protein; all 64 codons × tables 1/4/11; parsers against GenBank fixtures | Vitest + fast-check property tests |
-| Folding | Nussinov matches brute force for small n; ViennaRNA WASM matches native `RNAfold` on a fixture set | Golden tests |
-| Simulation | Birth–death process mean = k/γ and Poisson variance; SSA vs. ODE agree at high counts; replicator growth rate; **deterministic replay hash** | Statistical tests with fixed seeds + tolerance |
-| Geometry | Phosphate spacing, helix pitch and groove widths within tolerance of 1BNA | Unit tests |
-| Rendering | Key scenes at fixed seed and camera | Playwright screenshots (headless Chromium, software GL) |
-| Performance | Simulation throughput; frame-time checklist on reference devices before each release | `vitest bench` in CI + manual checklist |
-| Content | Objectives, evidence, references and simplifications present; glossary links resolve | `tools/content-lint` in CI |
-| Accessibility | axe-core on 2D UI; keyboard-only walkthrough per chapter | Playwright + manual |
-| Science | Reviewer sign-off per chapter | `docs/science/` checklist |
-| Users | Think-aloud sessions after Phases 2, 3 and 5; quick pre/post quiz to measure learning | Manual |
+| Genomes + annotations | NCBI/GenBank, RefSeq, Ensembl Bacteria | Generally unrestricted |
+| Protein sequences and function | UniProt | CC BY 4.0 |
+| 3D structures | RCSB PDB (CC0), AlphaFold DB (CC BY 4.0) | Attribution required for AlphaFold |
+| Enzyme kinetics (kcat, Km) | BRENDA, SABIO-RK | **Verify terms before any non-academic use** |
+| Regulatory networks | RegulonDB, EcoCyc | **EcoCyc has licensing conditions — check** |
+| Quantitative cell biology numbers | BioNumbers | Cited per entry |
+| RNA families and structures | Rfam, RNAcentral | Generally open |
+| Minimal-cell model parameters | Published syn3A whole-cell model repositories | **Check repository license before reuse** |
+| Cell-free expression time courses | Published PURE/TXTL modeling papers | Extract from figures/supplements; cite |
+
+**Process:** every dataset gets an ingest script in `reference/ingest/`, a recorded source URL and access date, and a license note in `docs/science/`. Nothing enters `parameters.sqlite` by hand.
+
+### 8.2 Predictors, and their declared error
+
+Each predictor is a plugin behind a trait, and each ships with a benchmark result that becomes the `Predicted` provenance's error distribution:
+
+| Quantity | Method | Declared accuracy |
+|---|---|---|
+| Translation initiation rate | Thermodynamic initiation model (open-source implementation) | ~53% within 2×, ~91% within 10× |
+| RNA secondary structure | Nearest-neighbour thermodynamics; optionally ML | F1 ≈ 0.7 typical; worse on unseen families; pseudoknots poor |
+| Promoter strength | PWM scoring; optionally ML | Poor — treat as rank-order only |
+| Variant effect | Genomic language models (see §11) | Rank-order, not rate constants |
+| Protein structure | Precomputed from AlphaFold DB | High for natural proteins; **no structure prediction at runtime** |
+
+**Rule:** a predictor may never upgrade its own provenance. Predicted stays Predicted no matter how good the model claims to be.
 
 ---
 
-## 10. Risks and mitigations
+## 9. Rendering, assets and the Blender pipeline
 
-| Risk | Likelihood | Impact | Mitigation |
+You asked whether AI can drive programs on your PC. **Yes** — Claude Code running locally can invoke Blender headlessly and script it in Python. [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) is the walkthrough. The architectural point:
+
+### 9.1 Bake offline, render cheap at runtime
+
+Blender is used as an **offline asset compiler**, never at runtime:
+
+```
+PDB / mmCIF / AlphaFold entry
+  → reference/ingest: clean, select chains, compute coarse bead model
+  → Blender (headless) + Molecular Nodes: build surface/cartoon representations,
+      decimate to LOD meshes, bake ambient occlusion and normal maps,
+      bake matcap/impostor sprite atlases for distant instances
+  → export glTF/GLB + KTX2 textures → assets/baked/
+  → the app loads these; it never runs Blender
+```
+
+Molecular Nodes is a Blender add-on built on Geometry Nodes that imports molecular formats and ships a large library of molecular-specific nodes. It has a Python API, though that API is explicitly experimental and has been changing — so the bake scripts should be **pinned to a specific Blender + add-on version** and treated as a reproducible build step, with outputs committed or cached.
+
+### 9.2 What gets rendered how
+
+| Scale | Representation | Technique |
+|---|---|---|
+| Atomic | Ball-and-stick / space-filling | GPU **sphere impostors** (ray-cast in the fragment shader) — millions of atoms without millions of triangles |
+| Molecular | Cartoon / surface | Baked LOD meshes from Blender |
+| Machine | Ribosome, polymerase at work | Real structures, animated between conformational states by the event stream |
+| Crowd | Cytoplasm | Instanced impostors with baked matcaps; procedural Brownian motion for non-focal molecules |
+| Nucleic acid | Helices of any length | Instanced per-nucleotide, transforms computed in the vertex shader from the instance index |
+
+### 9.3 Visual quality, deliberately
+
+Since you want it to look good: soft ambient occlusion (a screen-space method such as GTAO/N8AO), physically-based materials, subtle depth of field on the focal object, selective bloom only on catalytic events, and filmic tone mapping (AgX). Dark, near-black environment with a faint volumetric suggestion of solvent. The reference aesthetic is David Goodsell's molecular illustration: flat-ish shading, strong silhouettes, semantic color, no gratuitous specularity.
+
+---
+
+## 10. Sound design
+
+You said yes to quality audio. The design that fits an accuracy-first tool: **sonification, not soundtrack.**
+
+- **Event-driven procedural audio via the Web Audio API.** Each simulation event class maps to a short synthesized sound: nucleotide addition (a soft tick, pitch-mapped to base identity), peptide bond formation, initiation, termination, misincorporation (a distinct, slightly dissonant cue — errors should be *audible*), machine stalling.
+- **Density becomes texture.** At realistic event rates you get thousands of events per second; individual ticks merge into a continuous texture whose density and timbre encode activity. That's genuinely informative: you can *hear* a ribosome stall.
+- **Rate-aware mixing.** Because event rates span orders of magnitude, sounds are grouped and voice-limited (a pool of ~64 voices with priority by event salience), and the mix is normalized against the current time-dilation factor.
+- **Ambience.** A low, slowly-evolving drone bed keyed to the current tier — quiet and spatially thin at T1 (a tube), denser and warmer at T3 (inside a cell).
+- **Toggleable sonification channels**, so you can solo, say, "misincorporation events only" and listen to the error rate.
+
+Implementation: Web Audio in the frontend, driven by the same event channel that drives rendering. No external audio middleware needed.
+
+---
+
+## 11. AI inside the app
+
+Ranked by actual value, which is the reverse of what's usually built first:
+
+### 11.1 AI as a predictor with declared error bars (highest value)
+
+Genomic language models are, right now, the best available tools for some of the L2/L4 gaps. The recent generation is trained across all domains of life at very large scale (the leading open one was trained on roughly 9.3 trillion nucleotides from over 128,000 species, at 40B parameters with a 1-megabase context window) and is state-of-the-art for **noncoding** variant effects in particular — which is exactly where classical methods are weakest.
+
+Integration rule, which is non-negotiable: **these plug in behind the same predictor trait as any other model, produce `Predicted` provenance, carry their benchmarked error distribution, and never upgrade themselves to `Measured`.** They are one more fallible instrument in a rack of fallible instruments.
+
+Uses: variant-effect scoring for edits, annotation of unannotated imported sequences, plausibility scoring for designed sequences, and filling the "unknown function" column in the Capability Report with clearly-labeled guesses.
+
+Practical note: running a 40B-parameter model locally needs serious GPU memory; a smaller checkpoint or a hosted endpoint is the realistic near-term route (§14).
+
+### 11.2 AI as a scenario builder
+
+Natural language → a validated scenario file. "Set up PURE at standard concentrations with 5 nM of this plasmid and run 20 replicates for two hours." The model emits a scenario YAML; the app validates it against the schema and shows you the diff before running. Low risk, high convenience, because the output is checked by a schema rather than trusted.
+
+### 11.3 AI as a lab assistant
+
+A local model (via a local inference server) with read access to the current run's state, event log and parameter provenance, answering questions like "why did expression plateau at t=40 min?" — with the constraint that it must cite specific events or parameters from the run. Grounded in the run data, not in its own recollection.
+
+### 11.4 What not to build
+
+An AI that generates biological explanations without grounding. For an accuracy-first tool, a confident wrong explanation is worse than no explanation.
+
+---
+
+## 12. Validation suite
+
+This replaces the human science reviewer from v1. It runs in CI on every commit, and it *is* the credibility of the project.
+
+| ID | Test | Pass criterion |
+|---|---|---|
+| **V0** | Translate every annotated CDS in three reference genomes; compare to the deposited protein sequences | **100% identical**, with any mismatch explained by a documented recoding event |
+| **V1** | Round-trip GenBank → internal model → GenBank | Semantically identical |
+| **V2** | Reverse complement, transcription, and all codon tables against known vectors | Exact |
+| **V3** | Stochastic engine against analytic solutions (birth–death mean and variance, first-passage times) | Within sampling tolerance over N seeds |
+| **V4** | Fast lane vs. reference lane on identical inputs | Within declared tolerance per quantity |
+| **V5** | RNA folding vs. ViennaRNA native on a fixture set | Identical structures, or documented differences |
+| **V6** | **Cell-free expression time course** vs. published measured curves | Within published experimental error |
+| **V7** | Resource depletion: predicted amino-acid consumption vs. protein yield | Stoichiometrically exact |
+| **V8** | Codon-level: rare-codon clusters reduce elongation rate in the measured direction and rough magnitude | Qualitative + rank correlation |
+| **V9** | syn3A doubling time and macromolecular composition | Within ~10% of published values |
+| **V10** | Determinism: same manifest → bit-identical output, across all three OSes | Exact hash match |
+| **V11** | Strict mode: no `Assumed` parameter reachable in any shipped scenario | Zero |
+
+**V6 is the one that matters most.** It is the first test where the simulator is compared against physical reality rather than against itself.
+
+---
+
+## 13. Roadmap
+
+Reordered for accuracy-first and desktop-first. Estimates assume AI-assisted development with you reviewing, and include the data curation work, which is usually underestimated.
+
+| Phase | Deliverable | Tier | Estimate |
 |---|---|---|---|
-| **Scope creep** (the ceiling is unlimited) | High | High | Vertical slices; explicit non-goals; every phase ships something usable |
-| **Misrepresenting science** (e.g. "DNA builds life", teleology) | Medium | High | Evidence labels, "What we simplified", reviewer sign-off, writing guidelines |
-| **Emergence is hard to tune** (replicators die out or explode; nothing interesting happens in watchable time) | High | Medium | Sped-up rates with disclosure; pre-validated seeds; Director "skip to interesting"; parameter sweeps in CI |
-| **Performance on low-end devices** | Medium | High | Quality tiers, instancing, LOD, visual proxies, WebGL2 fallback, test on a real Chromebook |
-| **Getting lost in 3D** | Medium | Medium | Director camera, "reset view", scale ladder, focus-on-select, onboarding |
-| **WASM toolchain complexity** | Medium | Low | Start in pure TS behind interfaces; port only what benchmarks require |
-| **Third-party licenses** (ViennaRNA, datasets, fonts) | Medium | Medium | License review in Phase 0 spikes; record in `docs/adr/` |
-| **Solo-developer burnout** | Medium | High | Small milestones, public alpha early for motivation, cut scope before cutting quality |
-| **AI tutor makes things up** (if added) | Medium | Medium | Ground it in chapter content + references; show sources; "I'm not sure" behavior; feature flag |
+| **0. Foundations** | Repo, Tauri shell, Rust core skeleton, parameter store with units and provenance, CI, ADRs | — | 2–3 weeks |
+| **1. Tier 0 complete** | Sequence semantics: import any genome, exact translation, ORFs, recoding, feature detection, sequence editor, Capability Report v1. **V0–V2 green.** | T0 | 4–6 weeks |
+| **2. First light** | 3D viewport, instanced helices, LOD, structure loading, picking, sequence↔3D sync. Static but real. | T0 | 4–6 weeks |
+| **3. The engine** | Stochastic core, machines, transcription and translation at step level, event log, snapshots, determinism. **V3, V10 green.** | T1 | 8–10 weeks |
+| **4. It runs** | Full cell-free (PURE-type) scenario: defined mix, one gene, nucleotide-resolution execution, animated in 3D, ensemble runs with uncertainty bands. **V4–V7 green.** ← *the flagship milestone* | T1 | 6–8 weeks |
+| **5. Reference lane** | Python sidecar, cross-checking in CI, ingest pipelines, validation dashboard. **V8 green.** | T1 | 4 weeks |
+| **6. Editing and comparison** | Mutate/insert/delete with live consequence analysis, A/B compare, saved runs, manifest diffing, variant-effect predictors. | T1 | 4–6 weeks |
+| **7. Polish pass** | Blender asset pipeline, baked LODs, sound design, visual quality pass. | T1 | 4–6 weeks |
+| **8. Encapsulation** | Vesicle compartment, finite volume, resource depletion, membrane rendering. | T2 | 6–8 weeks |
+| **9. Whole cell** | syn3A: full gene set, metabolism, replication, growth, division. **V9 green.** | T3 | 16–24 weeks |
+| **10. Populations** | Mutation, selection, lineage trees, evolution runs. | T4 | 8–10 weeks |
+| **11. Optional** | Journey/narrative content, RNA-world and designed-genome scenarios, web build. | T5 | open-ended |
+
+**Phase 4 is the real milestone.** At that point you have a working, validated genetic code simulator. Everything after is extension.
+
+Rough totals: **Phases 0–4 in about 6–8 months part-time, 3–4 months full-time.** Through Phase 9 (a living cell): **18–30 months part-time.**
 
 ---
 
-## 11. Open questions for you
+## 14. Budget options
 
-Each question has the default I'll assume if you don't answer.
+| Tier | Cost | What it buys | Verdict |
+|---|---|---|---|
+| **A. Free** | **$0** | Rust, Python, Node, Tauri, Blender, Molecular Nodes, ViennaRNA, PDB, AlphaFold DB, UniProt, NCBI, GitHub free tier. Runs on your existing PC. | **Covers Phases 0–10 completely.** Genuinely nothing essential is paywalled. |
+| **B. Assisted** | **~$20–200/mo** | AI coding assistance (the main cost, and the one that actually moves the schedule); optional hosted inference for genomic language models when a local GPU can't hold them; a cheap VM if you ever want CI on beefier hardware. | **Recommended.** The coding assistance is the highest-leverage spend by a wide margin. |
+| **C. Hardware** | **$1,500–4,000 one-time**, or ~$0.50–3/hr cloud GPU | A GPU with 24 GB+ VRAM: local genomic-language-model inference, fast Blender rendering, GPU-accelerated spatial simulation later. | **Optional, defer.** Rent by the hour first; buy only if you find yourself doing it constantly. |
 
-1. **Who is the primary audience?** (Middle school / high school / college / general public / researchers?)
-   *Default: curious teens and adults, roughly high school to intro-college.*
-2. **What's your programming background, and are you building this yourself?** This most affects the stack.
-   *Default: comfortable with (or willing to learn) TypeScript; solo; AI-assisted.*
-3. **Platform priority:** web browser, installable desktop app, tablet, or VR?
-   *Default: web, desktop-first, tablet-friendly; VR later.*
-4. **What order excites you most?** I recommend "Run the code" (central dogma) *first*: it's well defined, and it builds the viewer, debugger and engine that everything else needs. The RNA world follows immediately. If the RNA world is what motivates you, we can swap Phases 2 and 3 (the engine work just moves earlier).
-   *Default: central dogma first.*
-5. **Where on the accuracy ↔ spectacle dial?**
-   *Default: accuracy first, with openly stated simplifications; cinematic only where it clarifies.*
-6. **Open source or not? Any plan to monetize?**
-   *Default: open source (MIT for code, CC BY for written content).*
-7. **Editing scope:** should users be able to import *real* genomes (e.g. from GenBank) to view and annotate them, with simulation limited to curated models? Or only toy/curated genomes?
-   *Default: import real sequences for viewing and annotation; simulate only curated models.*
-8. **Classroom features** (teacher dashboards, assignments, accounts): in scope, and when?
-   *Default: not before Phase 6; static site until then.*
-9. **Budget for hosting/backend** (only matters for accounts, cloud saves, the AI tutor)?
-   *Default: $0: static hosting only.*
-10. **Timeline or deadline?** (Science fair, class, portfolio, launch date?)
-    *Default: none; phase-by-phase.*
-11. **Name:** keep "Primordia" or pick another? (Other ideas: *Helix Lab*, *Origin*, *Codon*, *Bootstrap*.)
+**Licensing costs to watch** (these are the realistic surprises): ViennaRNA's license terms for non-academic use; BRENDA and EcoCyc terms for anything commercial; AlphaFold DB requires attribution. If Primordia stays open-source and non-commercial, all of this is straightforward — which is a mild argument for staying open-source.
 
 ---
 
-## 12. Next steps (first two weeks)
+## 15. Risks
 
-1. **You:** answer the open questions (at least 1–4).
-2. Create the `primordia` repository (or keep it here) and scaffold the monorepo as in §5.4.
-3. Run the three Phase 0 spikes (renderer, 100k-bp helix, ViennaRNA WASM + license) and write ADR-001 to ADR-003.
-4. Build `bio-core` v0 with tests (genetic codes, translation, reverse complement, FASTA).
-5. Make a low-fidelity mockup (Figma or paper) of the layout in §4.1 and show it to 2–3 people from the target audience.
-6. Look for a science reviewer (a biology teacher, grad student or professor).
+| Risk | Why it's real here | Mitigation |
+|---|---|---|
+| **Accuracy theatre** — the provenance system exists but everything is quietly `Assumed` | The easiest failure mode for this design | Strict mode blocks it; CI counts `Assumed` parameters and fails on regression (V11) |
+| **The parameter hunt is the actual project** | Curating cited rate constants is slow, unglamorous, and the dominant cost of accuracy | Start with the PURE system precisely because its parameter set is small and published; grow outward |
+| **Two lanes diverge and nobody notices** | Cross-checks silently disabled when they get annoying | V4 is a hard CI failure; tolerances live in version control and changing one is a reviewable diff |
+| **Step-level detail is too slow to watch** | A ribosome does ~15 codons/s; a cell has hundreds | Hybrid scheduling; only focal molecules run at full detail; benchmark early in Phase 3 |
+| **Scope creep into Tier 3 too early** | syn3A is seductive and is 4× the work of Tier 1 | Phase gate: no Tier 3 work until V6 passes |
+| **Blender pipeline rot** | Molecular Nodes' API is explicitly experimental and changing | Pin Blender + add-on versions; cache baked outputs; the app never depends on Blender at runtime |
+| **Solo project stalls** | Long build, no external deadline | Every phase produces something usable on its own; Phase 4 is deliberately early |
+
+---
+
+## 16. Terms you asked about
+
+**Recommendation 11, "start with a vertical slice."** Two ways to build: *horizontally*, finishing the whole data layer, then the whole simulation layer, then the whole UI — you have nothing that works until the very end, and integration problems all surface at once, late. Or *vertically*: pick one narrow capability and build it end to end, thin but complete. Here that means: **one gene, one promoter, one ribosome binding site, expressed in one defined cell-free mix, rendered in 3D, with real cited parameters and a passing validation test.** Narrow, but every layer is exercised and every interface is proven. Phase 4 is that slice. Everything afterwards widens it.
+
+**Recommendation 14, "i18n."** Internationalization: structuring the app so UI text lives in a lookup table rather than hardcoded in components, making translation to other languages a data change instead of a code change. It's nearly free upfront and expensive to retrofit. **Given that the audience is you, I'd skip it** — I'm noting it only so the choice is deliberate. (A related practice worth keeping regardless: don't concatenate strings to build sentences.)
+
+---
+
+## 17. Remaining open questions
+
+Only three left, and none of them block Phase 0:
+
+1. **Which organism after syn3A?** *E. coli* has by far the best data and the most published models, but it's ~10× the genes. Default: *E. coli* K-12 MG1655, at Tier 1 only (single genes in cell-free), with Tier 3 reserved for syn3A.
+2. **How far into spatial simulation do you want to go?** Well-mixed compartments get you through Tier 1–2 and much of Tier 3. Full spatial reaction–diffusion is a large additional effort and is where the published whole-cell models spend most of their compute. Default: well-mixed through Phase 9, spatial as an optional Phase 12.
+3. **Open-source now or later?** Affects which datasets you can use without license review. Default: develop in a private repo, decide before Phase 5 (when data ingestion starts in earnest).
 
 ---
 
 ## Appendix A: Reference numbers
 
-Approximate values for tuning and for the time/scale HUD. Verify against primary sources before shipping any chapter.
+Values for tuning and sanity checks. **Every one must be replaced by a cited entry in `parameters.sqlite` before it enters the simulation** — these are for orientation only.
 
-| Quantity | Value |
+| Quantity | Approximate value |
 |---|---|
-| B-DNA | ~10.5 bp/turn, ~3.4 Å rise, ~20 Å diameter |
-| A-form RNA duplex | ~11 bp/turn, ~2.6–2.8 Å rise, wider and with a hollow core |
+| B-DNA geometry | ~10.5 bp/turn, ~3.4 Å rise, ~20 Å diameter |
+| A-form RNA duplex | ~11 bp/turn, ~2.6–2.8 Å rise |
 | Transcription bubble | ~12–14 bp |
-| RNA polymerase speed (*E. coli*) | ~40–80 nt/s |
-| Ribosome speed (*E. coli*) | ~10–20 amino acids/s |
-| Replicative DNA polymerase speed (*E. coli*) | ~1,000 nt/s |
-| Error rates | DNA replication ~10⁻⁹–10⁻¹⁰ per bp (with proofreading and repair); transcription ~10⁻⁵–10⁻⁴; translation ~10⁻⁴–10⁻³ per residue |
-| QT45 ribozyme | 45 nt; 94.1% per-nucleotide fidelity; ~0.2% yield over 72 days; 3-letter building blocks; alkaline eutectic ice |
-| Promoter consensus (σ70, bacteria) | −35 `TTGACA`, −10 `TATAAT`, spacer ~17 bp (15–19) |
-| Shine–Dalgarno (RBS) | ~`AGGAGG`, ~5–9 nt upstream of the start codon |
-| Genetic code tables (NCBI) | 1 = standard; 11 = bacterial; 4 = *Mycoplasma* (UGA = Trp) |
-| JCVI-syn3.0 | 473 genes, ~531 kbp (2016); 149 genes of unknown function at publication |
-| JCVI-syn3A | 493 genes, ~543 kbp, ~105 min doubling, ~400 nm diameter, ~500 ribosomes |
-| *E. coli* / human genome | ~4.6 Mbp / ~3.1 Gbp (why "view the whole genome at nucleotide level" needs LOD) |
-| Eigen error threshold | `L_max ≈ ln(σ) / ε` |
+| RNAP elongation (*E. coli*) | ~40–80 nt/s |
+| Ribosome elongation (*E. coli*) | ~10–20 aa/s |
+| Ribosome mRNA footprint | ~30 nt (sets the queueing limit) |
+| Replicative DNA polymerase | ~1,000 nt/s |
+| Error rates | replication ~10⁻⁹–10⁻¹⁰/bp; transcription ~10⁻⁵–10⁻⁴; translation ~10⁻⁴–10⁻³ |
+| σ70 promoter consensus | −35 `TTGACA`, −10 `TATAAT`, spacer 15–19 bp |
+| Shine–Dalgarno | ~`AGGAGG`, ~5–9 nt upstream of the start |
+| Translation tables (NCBI) | 1 standard; 11 bacterial; 4 *Mycoplasma* (UGA = Trp) |
+| JCVI-syn3A | 493 genes, ~543 kbp, ~105 min doubling, ~400 nm diameter |
+| syn3A unknown function | roughly 15–30% of genes, depending on source and criterion |
+| *E. coli* K-12 | ~4.64 Mbp, ~4,300 protein-coding genes |
+| PURE-type system | reconstituted from tens of purified components at known concentrations |
+| Initiation-rate prediction | ~53% within 2×, ~91% within 10× |
+| RNA structure prediction | F1 ≈ 0.7 typical on mixed benchmarks |
 
-## Appendix B: Key scientific references
+## Appendix B: References
 
-RNA world and replicators
-- Kruger, K. et al. (1982). Self-splicing RNA (Tetrahymena). *Cell.* (Cech lab)
-- Guerrier-Takada, C. et al. (1983). The RNA moiety of RNase P is the catalytic subunit. *Cell.* (Altman lab)
-- Nissen, P. et al. (2000). The structural basis of ribosome activity in peptide bond synthesis. *Science.*
-- Mills, D. R., Peterson, R. L. & Spiegelman, S. (1967). An extracellular Darwinian experiment with a self-duplicating nucleic acid molecule. *PNAS.*
-- Johnston, W. K. et al. (2001). RNA-catalyzed RNA polymerization. *Science.*
-- Lincoln, T. A. & Joyce, G. F. (2009). Self-sustained replication of an RNA enzyme. *Science.*
-- Powner, M. W., Gerland, B. & Sutherland, J. D. (2009). Synthesis of activated pyrimidine ribonucleotides in prebiotically plausible conditions. *Nature.*
-- Holliger lab (MRC LMB). A small polymerase ribozyme that can synthesize itself and its complementary strand. *Science* (2025–26). doi:10.1126/science.adt2760. Preprint: bioRxiv 10.1101/2024.10.11.617851.
-- Eigen, M. (1971). Self-organization of matter and the evolution of biological macromolecules. *Naturwissenschaften.*
-- Schuster, P. et al. (1994). From sequences to shapes and back. *Proc. R. Soc. B.*
-
-Protocells
-- Chen, I. A., Roberts, R. W. & Szostak, J. W. (2004). The emergence of competition between model protocells. *Science.*
-- Zhu, T. F. & Szostak, J. W. (2009). Coupled growth and division of model protocell membranes. *JACS.*
-- Szathmáry, E. & Demeter, L. (1987). Group selection of early replicators and the origin of life. *J. Theor. Biol.*
-- Matsumura, S. et al. (2016). Transient compartmentalization of RNA replicators prevents extinction due to parasites. *Science.*
-
-Minimal and whole cells
-- Gibson, D. G. et al. (2010). Creation of a bacterial cell controlled by a chemically synthesized genome. *Science.*
-- Hutchison, C. A. et al. (2016). Design and synthesis of a minimal bacterial genome. *Science.*
-- Breuer, M. et al. (2019). Essential metabolism for a minimal cell. *eLife.*
+**Whole-cell and systems modeling**
 - Karr, J. R. et al. (2012). A whole-cell computational model predicts phenotype from genotype. *Cell.*
+- Macklin, D. N. et al. (2020). Simultaneous cross-evaluation of heterogeneous *E. coli* datasets via mechanistic simulation. *Science.*
 - Thornburg, Z. R. et al. (2022). Fundamental behaviors emerge from simulations of a living minimal cell. *Cell.*
-- Thornburg, Z. R., Maytin, A. et al. (2026). Bringing the genetically minimal cell to life on a computer in 4D. *Cell.* Code: github.com/Luthey-Schulten-Lab/Minimal_Cell
+- Thornburg, Z. R., Maytin, A. et al. (2026). Bringing the genetically minimal cell to life on a computer in 4D. *Cell.* Code: [Luthey-Schulten-Lab/Minimal_Cell](https://github.com/Luthey-Schulten-Lab/Minimal_Cell)
+- Agmon, E. et al. (2022). Vivarium: an interface and engine for integrative multiscale modeling in computational biology. *Bioinformatics.*
+- Breuer, M. et al. (2019). Essential metabolism for a minimal cell. *eLife.*
+- Hutchison, C. A. et al. (2016). Design and synthesis of a minimal bacterial genome. *Science.*
 
-Methods
+**Cell-free expression**
+- Shimizu, Y. et al. (2001). Cell-free translation reconstituted with purified components. *Nature Biotechnology.*
+- Mavelli, F. et al. (2015). A simple protein synthesis model for the PURE system operation. *Bulletin of Mathematical Biology.*
+- Nucleotide-level chemical reaction network modeling of reconstituted cell-free expression systems. *ACS Synthetic Biology* (2026).
+
+**Prediction methods**
+- Salis, H. M. et al. (2009). Automated design of synthetic ribosome binding sites. *Nature Biotechnology.*
+- OSTIR: open source translation initiation rate prediction. *JOSS* (2021).
+- Lorenz, R. et al. (2011). ViennaRNA Package 2.0. *Algorithms for Molecular Biology.*
+- Sato, K. et al. (2021). RNA secondary structure prediction using deep learning with thermodynamic integration. *Nature Communications.*
+- Deep learning for RNA secondary structure determination: gauging generalizability. *RNA* (2026).
+- Brixi, G. et al. Evo 2: genome modeling and design across all domains of life. *Nature* (2026). Code: [arcinstitute/evo2](https://github.com/arcinstitute/evo2)
+- Jumper, J. et al. (2021). Highly accurate protein structure prediction with AlphaFold. *Nature.*
+
+**Simulation methods**
 - Gillespie, D. T. (1977). Exact stochastic simulation of coupled chemical reactions. *J. Phys. Chem.*
-- Nussinov, R. & Jacobson, A. B. (1980). Fast algorithm for predicting the secondary structure of single-stranded RNA. *PNAS.*
-- Zuker, M. & Stiegler, P. (1981). Optimal computer folding of large RNA sequences. *Nucleic Acids Res.*
-- Lorenz, R. et al. (2011). ViennaRNA Package 2.0. *Algorithms Mol. Biol.*
-- Elowitz, M. B. & Leibler, S. (2000). A synthetic oscillatory network of transcriptional regulators. *Nature.*
-- Gardner, T. S., Cantor, C. R. & Collins, J. J. (2000). Construction of a genetic toggle switch in *E. coli*. *Nature.*
+- Roberts, E. et al. (2013). Lattice Microbes: high-performance stochastic simulation for the reaction-diffusion master equation. *J. Comput. Chem.*
+- Hoffmann, M. et al. (2019). ReaDDy 2: fast and flexible software framework for interacting-particle reaction dynamics. *PLOS Comput. Biol.*
+- Andrews, S. S. Smoldyn: particle-based simulation of spatial reaction–diffusion.
 
-## Appendix C: Prior art and inspiration
-
-- **David Goodsell**: *The Machinery of Life*; molecular watercolor style (art direction).
-- **cellPACK / CellPAINT / Mesoscope** (Scripps): packing and painting whole-cell mesoscale scenes.
-- **Mol\*** and **PDB-101** (RCSB): structure viewing and education.
-- **Eterna** and **Foldit**: citizen-science puzzle games for RNA and protein design (Challenges mode).
-- **BioNetGen / NFsim / Kappa**: rule-based modeling (sim engine design).
-- **SBOL Visual**: standard glyphs for genetic parts (Lab construct builder).
-- **Powers of Ten** (Eames, 1977): the semantic-zoom prologue.
-- **John von Neumann**, *Theory of Self-Reproducing Automata*: the "code + constructor + copier" framing.
+**Tooling**
+- Johnston, B. A. [Molecular Nodes](https://github.com/BradyAJohnston/MolecularNodes) — molecular import and animation in Blender.
