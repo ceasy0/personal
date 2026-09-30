@@ -10,6 +10,8 @@ This directory currently holds planning documents. No code yet.
 |---|---|
 | [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) | The plan: what the app is, the accuracy contract, architecture, the simulator design, roadmap, budget. **Start here.** |
 | [`ACCURACY_ROADMAP.md`](./ACCURACY_ROADMAP.md) | What we do and don't understand about the genetic code, layer by layer, and what would have to change for a complete simulation to become possible. |
+| [`WHY_NOT_BOTTOM_UP.md`](./WHY_NOT_BOTTOM_UP.md) | Why the simulator doesn't start from atoms and compose upward — four walls, one of which is structural rather than computational. |
+| [`L2_SEQUENCE_TO_RATE.md`](./L2_SEQUENCE_TO_RATE.md) | What data and infrastructure it would take to make sequence-to-rate prediction measurement-limited. A costed thought experiment. |
 | [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) | Setting up the machine, including running AI locally so it can drive Blender and the rest of the toolchain. |
 
 ## The short version
